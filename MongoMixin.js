@@ -231,8 +231,6 @@ var MongoMixin = declare( null, {
                       }
                     });
                   }
-
-
                 };
               });
 

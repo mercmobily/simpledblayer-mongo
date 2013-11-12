@@ -21,7 +21,7 @@ var
 ;
 
 
-var simpledblayerTests = require( "../simpledblayer/test.js" );
+var simpledblayerTests = require( "./lib/simpledblayer/test.js" );
 
 var tests = simpledblayerTests.get(
 
