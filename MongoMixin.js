@@ -40,8 +40,10 @@ var MongoMixin = declare( null, {
     // if `_id` is not explicitely defined in the schema.
     // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
     // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
-    // FIXME: Taken this out of the picture, as _id is always important for the requester
-    // if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
+    // FIXME: Taken this out of the picture, as _id is important when inserting and you want to re-fetch the doc
+    // The solution is to manually delete _id if it's not in self.fields
+
+    if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
 
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
@@ -63,14 +65,15 @@ var MongoMixin = declare( null, {
       selector[ '$or' ] =  [];
 
       Object.keys( filters.conditions ).forEach( function( condition ){
-        console.log( condition );
 
         // Sets the mongo condition
         var mongoOperand = '$and';
         if( condition === 'or' ) mongoOperand = '$or';      
  
-        Object.keys( filters.conditions[ condition ]).forEach( function( field ){
-          var fieldObject = filters.conditions[ condition ][ field ];
+        filters.conditions[ condition ].forEach( function( fieldObject ){
+
+          var field = fieldObject.field;
+
           var item = { };
           item[ field ] = {};
 
@@ -104,8 +107,8 @@ var MongoMixin = declare( null, {
             break;
 
             case 'contain':
-              item[ field ] = { $regex: new RegExp( v ) };
             case 'contains':
+              item[ field ] = { $regex: new RegExp('.*' + v + '.*' ) };
             break;
 
             case 'endsWith':
@@ -130,11 +133,9 @@ var MongoMixin = declare( null, {
       if( selector[ '$or' ].length == 0 ) delete selector[ '$or' ];
 
     };    
- 
-    // console.log("SELECTOR:");
-    // console.log( require('util').inspect( selector, { depth: 10 }  ));
 
-    return { querySelector: selector, sortHash: filters.sort };
+    var sortHash = filters.sort || {}; 
+    return { querySelector: selector, sortHash: sortHash };
   }, 
 
   select: function( filters, options, cb ){
@@ -147,15 +148,30 @@ var MongoMixin = declare( null, {
       cb = options;
       options = {}
     } else if( typeof( options ) !== 'object' || options === null ){
-      throw( new Error("The options parameter must be a non-null object") );
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    
+
+    // Make up parameters from the passed filters
+    try {
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
     }
 
     // Actually run the query 
-    var mongoParameters = this._makeMongoParameters( filters );
     var cursor = self.collection.find( mongoParameters.querySelector, self.projectionHash );
 
     // Sanitise ranges
     saneRanges = self.sanitizeRanges( filters.ranges );
+
+
+    /*console.log("WTF?");
+    console.log( filters );
+    console.log( mongoParameters.querySelector );
+    console.log( saneRanges );
+    */
 
     // Skipping/limiting according to ranges/limits
     if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
@@ -166,7 +182,6 @@ var MongoMixin = declare( null, {
       if( err ){
         next( err );
       } else {
-
 
         if( options.useCursor ){
 
@@ -210,14 +225,13 @@ var MongoMixin = declare( null, {
 
         } else {
 
-          cursor.count( { applySkipLimit: true }, function( err, total ){
+          cursor.toArray( function( err, queryDocs ){
             if( err ){
-              cb( err );
+             cb( err );
             } else {
-
-              cursor.toArray( function( err, queryDocs ){
+              cursor.count( { applySkipLimit: true }, function( err, total ){
                 if( err ){
-                 cb( err );
+                  cb( err );
                 } else {
                   queryDocs.total = total;
 
@@ -230,6 +244,8 @@ var MongoMixin = declare( null, {
                         cb( null, queryDocs );
                       }
                     });
+                  } else {
+                    cb( null, queryDocs );
                   }
                 };
               });
@@ -256,7 +272,12 @@ var MongoMixin = declare( null, {
       cb = options;
       options = {}
     } else if( typeof( options ) !== 'object' || options === null ){
-      throw( new Error("The options parameter must be a non-null object") );
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // It's Mongo: you cannot update record._id
+    if( typeof( record._id ) !== 'undefined' ){
+      return cb( new Error("You cannot update _id in MongoDb databases") );
     }
 
     // if `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
@@ -273,8 +294,15 @@ var MongoMixin = declare( null, {
       updateOptions.multi = true;
     }
 
+    // Make up parameters from the passed filters
+    try {
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
+
+
     // Run the query
-    var mongoParameters = this._makeMongoParameters( filters );
     self.collection.update( mongoParameters.querySelector, { $set: record, $unset: unsetObject }, updateOptions, function( err, numberUpdated ) {
       if( err ){
         cb( err, null );
@@ -289,28 +317,34 @@ var MongoMixin = declare( null, {
   insert: function( record, options, cb ){
 
     var self = this;
+    var recordToBeWritten = {};
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
       cb = options;
       options = {}
     } else if( typeof( options ) !== 'object' || options === null ){
-      throw( new Error("The options parameter must be a non-null object") );
+      return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    // Set the record ID to keep Mongo happy and make
-    // subsequent search easier. 
-    if( typeof( record._id ) === 'undefined' ) record._id  = ObjectId();
+    // Copy record over, only for existing fields
+    for( var k in record ){
+      if( self.fields[ k ] ) recordToBeWritten[ k ] = record[ k ];
+    }
+
+    // Every record in Mongo MUST have an _id field
+    if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
     // Actually run the insert
-    self.collection.insert( record, function( err ){
+    self.collection.insert( recordToBeWritten, function( err ){
       if( err ) {
         cb( err );
       } else {
+
         if( ! options.returnRecord ){
-          cb( null, null );
+          cb( null );
         } else {
-          self.collection.findOne( { _id: record._id }, self.projectionHash, cb );
+          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, cb);
         }
       }
     });
@@ -328,7 +362,7 @@ var MongoMixin = declare( null, {
       cb = options;
       options = {}
     } else if( typeof( options ) !== 'object' || options === null ){
-      throw( new Error("The options parameter must be a non-null object") );
+      return cb( new Error("The options parameter must be a non-null object") );
     }
 
     if( options.multi ){
@@ -336,7 +370,11 @@ var MongoMixin = declare( null, {
     }
 
     // Run the query
-    var mongoParameters = this._makeMongoParameters( filters );
+    try { 
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
     self.collection.remove( mongoParameters.querySelector, deleteOptions, cb );
   },
 
