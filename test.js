@@ -14,10 +14,11 @@ var
 
 , declare = require('simpledeclare')
 
-, MongoMixin = require('./MongoMixin.js')
+, TingoMixin = require('./TingoMixin.js')
 
 , mw = require('mongowrapper')
 , async = require('async')
+, Db = require('tingodb')().Db;
 ;
 
 
@@ -26,13 +27,8 @@ var simpledblayerTests = require( "./lib/simpledblayer/test.js" );
 var tests = simpledblayerTests.get(
 
   function getDbInfo( done ) {
-    mw.connect('mongodb://localhost/tests', {}, function( err, db ){
-      if( err ){
-        throw new Error("MongoDB connect: could not connect to database");
-      } else {
-        done( null, db, MongoMixin );
-      }
-    });
+    var db = new Db('/tmp/tests', {});
+    done( null, db, TingoMixin );
   },
 
   function closeDb( db, done ) {
