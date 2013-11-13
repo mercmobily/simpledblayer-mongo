@@ -103,20 +103,17 @@ var TingoMixin = declare( null, {
             break;
 
             case 'startsWith':
-              //item[ field ] = { $regex: new RegExp('^' + v + '.*' ) };
-              item[ field ] = { $regex: new RegExp( v + '.*' ) };
+              item[ field ] = { $regex: new RegExp('^' + v + '.*' ) };
             case 'startWith':
             break;
 
             case 'contain':
             case 'contains':
-              //item[ field ] = { $regex: new RegExp('.*' + v + '.*' ) };
-              item[ field ] = { $regex: new RegExp(v) };
+              item[ field ] = { $regex: new RegExp('.*' + v + '.*' ) };
             break;
 
             case 'endsWith':
-              //item[ field ] = { $regex: new RegExp('.*' + v + '$' ) };
-              item[ field ] = { $regex: new RegExp('.*' + v ) };
+              item[ field ] = { $regex: new RegExp('.*' + v + '$' ) };
             case 'endWith':
             break;
 
@@ -138,7 +135,7 @@ var TingoMixin = declare( null, {
 
     };    
 
-     var sortHash = filters.sort || {};
+    var sortHash = filters.sort || {};
     return { querySelector: selector, sortHash: sortHash };
  
   }, 
@@ -170,6 +167,13 @@ var TingoMixin = declare( null, {
 
     // Sanitise ranges
     saneRanges = self.sanitizeRanges( filters.ranges );
+
+
+    /*console.log("WTF?");
+    console.log( filters );
+    console.log( mongoParameters.querySelector );
+    console.log( saneRanges );
+    */
 
     // Skipping/limiting according to ranges/limits
     if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
@@ -227,7 +231,7 @@ var TingoMixin = declare( null, {
 
           cursor.toArray( function( err, queryDocs ){
             if( err ){
-              cb( err );
+             cb( err );
             } else {
 
               cursor.count( { applySkipLimit: true }, function( err, total ){
