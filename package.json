@@ -1,17 +1,17 @@
 {
-  "name": "simpledblayer-tingo",
-  "description": "TingoDB layer for simpledblayer",
+  "name": "simpledblayer-mongo",
+  "description": "MongoDB layer for simpledblayer",
   "keywords": [
     "javascript",
     "database",
     "mongo"
   ],
-  "main": "TingoMixin.js",
+  "main": "MongoMixin.js",
   "version": "0.1.1",
   "private": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/mercmobily/simpledblayer-tingo"
+    "url": "https://github.com/mercmobily/simpledblayer-mongo"
   },
   "author": {
     "name": "Tony Mobily"
@@ -19,6 +19,6 @@
  "dependencies": {
     "simpledblayer": "0.1.x"
     "simpledeclare": "0.2.x"
-    "tingodb": "0.2.x"
+    "mongodb": "0.2.x"
   }
 }
