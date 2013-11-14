@@ -23,6 +23,8 @@ var ObjectId = engine.ObjectID.createFromString;
 
 //var ObjectId = tingodb.ObjectID;
 
+
+
 var TingoMixin = declare( null, {
 
   projectionHash: {},
@@ -57,9 +59,10 @@ var TingoMixin = declare( null, {
   },
 
 
+
   _makeMongoParameters: function( filters ){
 
-    var selector = {};
+    var selector = {}, finalSelector = {};
 
     if( typeof( filters.conditions ) !== 'undefined' && filters.conditions !== null ){
       selector[ '$and' ] =  [];
@@ -125,27 +128,34 @@ var TingoMixin = declare( null, {
           // Finally, push down the item!
           selector[ mongoOperand ].push( item );
         });
-
  
       });
 
       // Clean up selector, as Mongo doesn't like empty arrays for selectors
-      if( selector[ '$and' ].length == 0 ) delete selector[ '$and' ];
-      if( selector[ '$or' ].length == 0 ) delete selector[ '$or' ];
+      if( selector[ '$and' ].length == 0 ){
+        finalSelector[ '$or' ] = selector[ '$or' ];
+      } else {
+        finalSelector[ '$and' ] = selector[ '$and' ];
+
+        if( selector[ '$or' ].length !== 0 ){
+          finalSelector[ '$and' ].push( { '$or': selector[ '$or' ] } );
+        }
+        //console.log( "FINAL SELECTOR" );        
+        //console.log( require('util').inspect( finalSelector, { depth: 10 } ) );        
+
+      }
+
 
     };    
 
-    var sortHash = filters.sort || {};
-    return { querySelector: selector, sortHash: sortHash };
- 
+    var sortHash = filters.sort || {}; 
+    return { querySelector: finalSelector, sortHash: sortHash };
   }, 
 
   select: function( filters, options, cb ){
 
     var self = this;
     var saneRanges;
-
-    debugger;
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -154,6 +164,8 @@ var TingoMixin = declare( null, {
     } else if( typeof( options ) !== 'object' || options === null ){
       return cb( new Error("The options parameter must be a non-null object") );
     }
+
+    
 
     // Make up parameters from the passed filters
     try {
@@ -187,45 +199,172 @@ var TingoMixin = declare( null, {
 
         if( options.useCursor ){
 
-          cb( null, {
+          cursor.count( { applySkipLimit: true }, function( err, total ){
 
-            next: function( done ){
+            cb( null, {
 
-              cursor.nextObject( function( err, obj) {
+              next: function( done ){
+
+                cursor.nextObject( function( err, obj) {
+                  if( err ){
+                    done( err );
+                  } else {
+
+                    // If options.delete is on, then remove a field straight after fetching it
+                    if( options.delete && obj !== null ){
+                      self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                        if( err ){
+                          done( err );
+                        } else {
+                          done( null, obj );
+                        }
+                      });
+                    } else {
+                       done( null, obj );
+                    }
+                  }
+                });
+              },
+
+              rewind: function( done ){
+                if( options.delete ){
+                  done( new Error("Cannot rewind a cursor with `delete` option on") );
+                } else {
+                  cursor.rewind();
+                  done( null );
+                }
+              },
+              close: function( done ){
+                cursor.close( done );
+              }
+            }, total );
+          })
+
+        } else {
+
+          cursor.toArray( function( err, queryDocs ){
+            if( err ){
+             cb( err );
+            } else {
+              cursor.count( { applySkipLimit: true }, function( err, total ){
                 if( err ){
-                  done( err );
+                  cb( err );
                 } else {
 
-                  // If options.delete is on, then remove a field straight after fetching it
-                  if( options.delete && obj !== null ){
-                    self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                  if( options.delete ){
+                    
+                    self.collection.remove( mongoParameters.querySelector, { multi: true }, function( err ){
                       if( err ){
-                        done( err );
+                        cb( err );
                       } else {
-                        if(  obj !== null && ! self.fields._id ) delete obj._id;
-                        done( null, obj );
+                        cb( null, queryDocs, total );
                       }
                     });
                   } else {
-                    if(  obj !== null && ! self.fields._id ) delete obj._id;
-                    done( null, obj );
+                    cb( null, queryDocs, total );
                   }
-                }
+                };
               });
-            },
 
-            rewind: function( done ){
-              if( options.delete ){
-                done( new Error("Cannot rewind a cursor with `delete` option on") );
-              } else {
-                cursor.rewind();
-                done( null );
+            };
+          })
+
+        }
+      }
+    });
+       
+  },
+
+
+  select: function( filters, options, cb ){
+
+    var self = this;
+    var saneRanges;
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    
+
+    // Make up parameters from the passed filters
+    try {
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
+
+    // Actually run the query 
+    var cursor = self.collection.find( mongoParameters.querySelector, self.projectionHash );
+
+    // Sanitise ranges
+    saneRanges = self.sanitizeRanges( filters.ranges );
+
+    // Skipping/limiting according to ranges/limits
+    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
+    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
+
+    // Sort the query
+    cursor.sort( mongoParameters.sortHash , function( err ){
+      if( err ){
+        next( err );
+      } else {
+
+        if( options.useCursor ){
+
+          cursor.count( { applySkipLimit: true }, function( err, total ){
+
+            cb( null, {
+
+              next: function( done ){
+
+                cursor.nextObject( function( err, obj) {
+                  if( err ){
+                    done( err );
+                  } else {
+
+                    // If options.delete is on, then remove a field straight after fetching it
+                    if( options.delete && obj !== null ){
+                      self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                        if( err ){
+                          done( err );
+                        } else {
+                          // Artificially delete doc._id if necessary
+                          if( obj !== null && ! self.fields._id ) delete obj._id;
+
+                          done( null, obj );
+                        }
+                      });
+                    } else {
+
+                     // Artificially delete doc._id if necessary
+                      if( obj !== null && ! self.fields._id ) delete obj._id;
+
+                      done( null, obj );
+                    }
+                  }
+                });
+              },
+
+              rewind: function( done ){
+                if( options.delete ){
+                  done( new Error("Cannot rewind a cursor with `delete` option on") );
+                } else {
+                  cursor.rewind();
+                  done( null );
+                }
+              },
+              close: function( done ){
+                cursor.close( done );
               }
-            },
-            close: function( done ){
-              cursor.close( done );
-            }
+            }, total);
+
           });
+
 
         } else {
 
@@ -234,17 +373,15 @@ var TingoMixin = declare( null, {
              cb( err );
             } else {
 
+              // Artificially delete doc._id if necessary
+              queryDocs.forEach( function( doc ){
+                if( doc !== null && ! self.fields._id ) delete doc._id;
+              })
+
               cursor.count( { applySkipLimit: true }, function( err, total ){
                 if( err ){
                   cb( err );
                 } else {
-
-                  queryDocs.total = total;
-
-                  // Delete _id from each item (manually!)
-                  queryDocs.forEach( function( item ){
-                    if( ! self.fields._id ) delete item._id;
-                  });
 
                   if( options.delete ){
                     
@@ -252,11 +389,11 @@ var TingoMixin = declare( null, {
                       if( err ){
                         cb( err );
                       } else {
-                        cb( null, queryDocs );
+                        cb( null, queryDocs, total );
                       }
                     });
                   } else {
-                    cb( null, queryDocs );
+                    cb( null, queryDocs, total );
                   }
                 };
               });
@@ -276,7 +413,6 @@ var TingoMixin = declare( null, {
 
     var self = this;
     var unsetObject = {};
-    var updateOptions = { multi: false };
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -300,11 +436,6 @@ var TingoMixin = declare( null, {
       });
     }
 
-    // Allow multiple updates
-    if( options.multi ){
-      updateOptions.multi = true;
-    }
-
     // Make up parameters from the passed filters
     try {
       var mongoParameters = this._makeMongoParameters( filters );
@@ -312,15 +443,27 @@ var TingoMixin = declare( null, {
       return cb( e );
     }
 
+    // If options.multi is off, then use findAndModify which will accept sort
+    if( !options.multi ){
+      self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: record, $unset: unsetObject }, function( err, doc ){
+        if( err ){
+          cb( err );
+        } else {
 
-    // Run the query
-    self.collection.update( mongoParameters.querySelector, { $set: record, $unset: unsetObject }, updateOptions, function( err, numberUpdated ) {
-      if( err ){
-        cb( err, null );
-      } else {
-        cb( null, numberUpdated );
-      }
-    });
+          if( doc ){
+            cb( null, 1 );
+          } else {
+            cb( null, 0 );
+          }
+        }
+      });
+
+    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
+    } else {
+
+      // Run the query
+      self.collection.update( mongoParameters.querySelector, { $set: record, $unset: unsetObject }, { multi: true }, cb );
+    }
 
   },
 
@@ -355,16 +498,17 @@ var TingoMixin = declare( null, {
         if( ! options.returnRecord ){
           cb( null );
         } else {
-          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, function( err, r ){
+          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, function( err, doc ){
             if( err ){
               cb( err );
-            } else {
-              if( ! self.fields._id ){
-                delete r._id;
-              }
-              cb( null, r );
+            } else { 
+
+              // Artificially delete doc._id if necessary
+              if( doc !== null && ! self.fields._id ) delete doc._id;
+
+              cb( null, doc );
             }
-          })
+          });
         }
       }
     });
@@ -375,8 +519,6 @@ var TingoMixin = declare( null, {
 
     var self = this;
 
-    var deleteOptions = { single: true };
-
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
       cb = options;
@@ -385,17 +527,33 @@ var TingoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    if( options.multi ){
-      deleteOptions.single = false;
-    }
-
     // Run the query
     try { 
       var mongoParameters = this._makeMongoParameters( filters );
     } catch( e ){
       return cb( e );
     }
-    self.collection.remove( mongoParameters.querySelector, deleteOptions, cb );
+
+    // If options.multi is off, then use findAndModify which will accept sort
+    if( !options.multi ){
+      self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
+        if( err ) {
+          cb( err );
+        } else {
+
+          if( doc ){
+            cb( null, 1 );
+          } else {
+            cb( null, 0 );
+          }
+        }
+    });
+
+    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
+    } else {
+      self.collection.remove( mongoParameters.querySelector, { single: false }, cb );
+    }
+
   },
 
 
