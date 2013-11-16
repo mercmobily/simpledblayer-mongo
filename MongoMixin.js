@@ -22,9 +22,12 @@ var
 ;
 
 
+
+
 var MongoMixin = declare( null, {
 
   projectionHash: {},
+  searchableHash: {},
 
   constructor: function( table, fields ){
 
@@ -32,19 +35,24 @@ var MongoMixin = declare( null, {
 
     // Make up the projectionHash, which is used in pretty much every query 
     self.projectionHash = {};
+    self.searchableHash = {};
     Object.keys( fields ).forEach( function( field ) {
        self.projectionHash[ field ] = true;
+       if( fields[ field ] ) self.searchableHash[ field ] = true;
+         
     });
 
     // Make sure that I have `_id: false` in the projection hash (used in all finds)
     // if `_id` is not explicitely defined in the schema.
     // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
     // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
-    // FIXME: Taken this out of the picture, as _id is important when inserting and you want to re-fetch the doc
-    // The solution is to manually delete _id if it's not in self.fields
-
     if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
 
+
+    // Make sure that I have `_id: false` in the projection hash (used in all finds)
+    // if `_id` is not explicitely defined in the schema.
+    // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
+    // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
@@ -52,11 +60,13 @@ var MongoMixin = declare( null, {
 
   // The default id maker available as an object method
   makeId: function( object, cb ){
-    MongoSchemaMixin.makeId( object, cb );
+    MongoMixin.makeId( object, cb );
   },
 
 
   _makeMongoParameters: function( filters ){
+
+    var self = this;
 
     var selector = {}, finalSelector = {};
 
@@ -73,11 +83,15 @@ var MongoMixin = declare( null, {
         filters.conditions[ condition ].forEach( function( fieldObject ){
 
           var field = fieldObject.field;
+          var v = fieldObject.value;
+
+          if( self.searchableHash[ field ] && typeof( fieldObject.value ) === 'string' ){
+            field = '__uc__' + field;
+            v = v.toUpperCase();
+          }
 
           var item = { };
           item[ field ] = {};
-
-          var v = fieldObject.value;
 
           switch( fieldObject.type ){
             case 'lt':
@@ -176,13 +190,6 @@ var MongoMixin = declare( null, {
     // Sanitise ranges
     saneRanges = self.sanitizeRanges( filters.ranges );
 
-
-    /*console.log("WTF?");
-    console.log( filters );
-    console.log( mongoParameters.querySelector );
-    console.log( saneRanges );
-    */
-
     // Skipping/limiting according to ranges/limits
     if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
     if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
@@ -272,11 +279,11 @@ var MongoMixin = declare( null, {
   },
 
 
-
   update: function( filters, record, options, cb ){
 
     var self = this;
     var unsetObject = {};
+    var recordToBeWritten = {};
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -291,12 +298,27 @@ var MongoMixin = declare( null, {
       return cb( new Error("You cannot update _id in MongoDb databases") );
     }
 
-    // if `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
+    // Copy record over, only for existing fields
+    for( var k in record ){
+      if( typeof( self.fields[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
+    }
+ 
+    // Sets the case-insensitive fields
+    Object.keys( self.searchableHash ).forEach( function( fieldName ){
+      if( self.searchableHash[ fieldName ] ){
+        if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
+          recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
+        }
+      }
+    });
+
+
+    // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
     // so that partial PUTs will "overwrite" whole objects rather than
     // just overwriting fields that are _actually_ present in `body`
     if( options.deleteUnsetFields ){
       Object.keys( self.fields ).forEach( function( i ){
-         if( typeof( record[ i ] ) === 'undefined' ) unsetObject[ i ] = 1;
+         if( typeof( recordToBeWritten[ i ] ) === 'undefined' ) unsetObject[ i ] = 1;
       });
     }
 
@@ -309,7 +331,7 @@ var MongoMixin = declare( null, {
 
     // If options.multi is off, then use findAndModify which will accept sort
     if( !options.multi ){
-      self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: record, $unset: unsetObject }, function( err, doc ){
+      self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
         if( err ){
           cb( err );
         } else {
@@ -326,7 +348,7 @@ var MongoMixin = declare( null, {
     } else {
 
       // Run the query
-      self.collection.update( mongoParameters.querySelector, { $set: record, $unset: unsetObject }, { multi: true }, cb );
+      self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
     }
 
   },
@@ -347,11 +369,20 @@ var MongoMixin = declare( null, {
 
     // Copy record over, only for existing fields
     for( var k in record ){
-      if( self.fields[ k ] ) recordToBeWritten[ k ] = record[ k ];
+      if( typeof( self.fields[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
     }
 
     // Every record in Mongo MUST have an _id field
     if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
+
+    // Sets the case-insensitive fields
+    Object.keys( self.searchableHash ).forEach( function( fieldName ){
+      if( self.searchableHash[ fieldName ] ){
+        if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
+          recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
+        }
+      }
+    });
 
     // Actually run the insert
     self.collection.insert( recordToBeWritten, function( err ){
@@ -415,7 +446,11 @@ var MongoMixin = declare( null, {
 
 // The default id maker
 MongoMixin.makeId = function( object, cb ){
-  cb( null, ObjectId() );
+  if( object === null ){
+    cb( null, ObjectId() );
+  } else {
+    cb( null, ObjectId( object ) );
+  }
 },
 
 exports = module.exports = MongoMixin;
