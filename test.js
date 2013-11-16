@@ -38,7 +38,56 @@ var tests = simpledblayerTests.get(
 
   function closeDb( db, done ) {
     db.close( done );
+  },
+
+  function makeExtraTests( g ){
+
+    return {
+
+      "mongo prep": function( test ){
+        g.mongoPeople = new g.Layer( 'mongoPeople', {  _id: true, name: true, surname: true, age: true } );
+        test.ok( g.mongoPeople );
+        test.done();
+      },
+
+      "mongo adds _id field": function( test ){
+
+         var person = { name: "Joe", surname: "Mitchell", age: 48 };
+         g.mongoPeople.insert( person, { returnRecord: true }, function( err, personReturned ){
+           test.ifError( err );
+           test.ok( personReturned._id );
+           test.notDeepEqual( person, personReturned, "Records match, but the returned one should have _id set" );
+           test.done();
+         });
+      },
+
+      "mongo and updating _id": function( test ){
+
+         var person = { name: "Tory", surname: "Amos", age: 56 };
+         g.mongoPeople.insert( person, function( err, personReturned ){
+           test.ifError( err );
+
+           g.mongoPeople.update( { conditions: { and: [ { field: 'name', type: 'is', value: 'Tory' } ] } }, { surname: "Me"  }, function( err, howMany ){
+             test.equal( howMany, 1 );
+           
+             g.mongoPeople.makeId( null, function( err, id ){
+               test.equal( typeof( id ), 'object' );
+
+               g.mongoPeople.update( { conditions: { and: [ { field: 'name', type: 'is', value: 'Tory' } ] } }, { _id: id  }, function( err, howMany ){ 
+                 test.equal( typeof( err ), 'object' ); 
+
+                 test.done();
+
+               });
+             });
+           });
+         });
+      },
+    }
+   
+
   }
+
 );
 
 
