@@ -116,17 +116,17 @@ var MongoMixin = declare( null, {
             break;
 
             case 'startsWith':
-              item[ field ] = { $regex: new RegExp('^' + v + '.*' ) };
+              item[ field ] = new RegExp('^' + v + '.*' );
             case 'startWith':
             break;
 
             case 'contain':
             case 'contains':
-              item[ field ] = { $regex: new RegExp('.*' + v + '.*' ) };
+              item[ field ] = new RegExp('.*' + v + '.*' );
             break;
 
             case 'endsWith':
-              item[ field ] = { $regex: new RegExp('.*' + v + '$' ) };
+              item[ field ] = new RegExp('.*' + v + '$' );
             case 'endWith':
             break;
 
