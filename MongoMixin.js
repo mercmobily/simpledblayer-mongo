@@ -90,6 +90,8 @@ var MongoMixin = declare( null, {
             v = v.toUpperCase();
           }
 
+          //TODO: Check here if searchableHash is ff -- if it is OFF, then searches on these fields should throw or quietly be dumped
+
           var item = { };
           item[ field ] = {};
 
