@@ -17,7 +17,6 @@ var
 , MongoMixin = require('./MongoMixin.js')
 
 , mw = require('mongowrapper')
-, async = require('async')
 ;
 
 
