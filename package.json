@@ -7,7 +7,7 @@
     "mongo"
   ],
   "main": "MongoMixin.js",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "private": false,
   "repository": {
     "type": "git",
@@ -18,6 +18,13 @@
   },
  "dependencies": {
     "simpledblayer": "0.3.x",
+    "simpledeclare": "0.3.x",
+    "mongowrapper": "0.3.x"
+  },
+  "scripts": {
+    "test": "nodeunit test.js"
+  },
+   "devDependencies": {
     "simpledeclare": "0.3.x",
     "mongowrapper": "0.3.x"
   }
