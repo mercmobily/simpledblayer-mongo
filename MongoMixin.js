@@ -143,20 +143,29 @@ var MongoMixin = declare( null, {
  
       });
 
-      // Clean up selector, as Mongo doesn't like empty arrays for selectors
-      if( selector[ '$and' ].length == 0 ){
-        finalSelector[ '$or' ] = selector[ '$or' ];
+      // Assign the `finalSelector` variable. Note that the final result can be:
+      // * Just $and conditions: { '$and': [ this, that, other ] }
+      // * Just $or conditions : { '$or': [ this, that, other ] }
+      // * $and conditions with $or: { '$and': [ this, that, other, { '$or': [ blah, bleh, bligh ] } ] }
+
+   
+      // No `$and` conditions...
+      if( selector[ '$and' ].length === 0 ){
+        // ...maybe there are `or` ones, which will get returned
+        if( selector[ '$or' ].length !== 0 ) finalSelector[ '$or' ] = selector[ '$or' ];
+
+      // There are `$and` conditions: assign them...
       } else {
         finalSelector[ '$and' ] = selector[ '$and' ];
 
+        // ...and shove the `$or` ones in there as one of them
         if( selector[ '$or' ].length !== 0 ){
           finalSelector[ '$and' ].push( { '$or': selector[ '$or' ] } );
         }
-        //console.log( "FINAL SELECTOR" );        
-        //console.log( require('util').inspect( finalSelector, { depth: 10 } ) );        
 
       }
-
+      // console.log( "FINAL SELECTOR" );        
+      // console.log( require('util').inspect( finalSelector, { depth: 10 } ) );        
 
     };    
 
@@ -177,7 +186,6 @@ var MongoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    
 
     // Make up parameters from the passed filters
     try {
@@ -295,14 +303,17 @@ var MongoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
+    /*
+    // TODO: Check that I actually can get away with this this way
     // It's Mongo: you cannot update record._id
     if( typeof( record._id ) !== 'undefined' ){
       return cb( new Error("You cannot update _id in MongoDb databases") );
     }
+    */
 
     // Copy record over, only for existing fields
     for( var k in record ){
-      if( typeof( self.fields[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
+      if( typeof( self.fields[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
     }
  
     // Sets the case-insensitive fields
