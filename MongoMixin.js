@@ -212,45 +212,56 @@ var MongoMixin = declare( null, {
 
         if( options.useCursor ){
 
-          cursor.count( { applySkipLimit: true }, function( err, total ){
-
-            cb( null, {
-
-              next: function( done ){
-
-                cursor.nextObject( function( err, obj) {
-                  if( err ){
-                    done( err );
-                  } else {
-
-                    // If options.delete is on, then remove a field straight after fetching it
-                    if( options.delete && obj !== null ){
-                      self.collection.remove( { _id: obj._id }, function( err, howMany ){
+          cursor.count( function( err, grandTotal ){
+            if( err ){
+              cb( err );
+            } else {
+              cursor.count( { applySkipLimit: true }, function( err, total ){
+                if( err ){
+                  cb( err );
+                } else {
+    
+                  cb( null, {
+      
+                    next: function( done ){
+      
+                      cursor.nextObject( function( err, obj) {
                         if( err ){
                           done( err );
                         } else {
-                          done( null, obj );
+      
+                          // If options.delete is on, then remove a field straight after fetching it
+                          if( options.delete && obj !== null ){
+                            self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                              if( err ){
+                                done( err );
+                              } else {
+                                done( null, obj );
+                              }
+                            });
+                          } else {
+                             done( null, obj );
+                          }
                         }
                       });
-                    } else {
-                       done( null, obj );
+                    },
+      
+                    rewind: function( done ){
+                      if( options.delete ){
+                        done( new Error("Cannot rewind a cursor with `delete` option on") );
+                      } else {
+                        cursor.rewind();
+                        done( null );
+                      }
+                    },
+                    close: function( done ){
+                      cursor.close( done );
                     }
-                  }
-                });
-              },
-
-              rewind: function( done ){
-                if( options.delete ){
-                  done( new Error("Cannot rewind a cursor with `delete` option on") );
-                } else {
-                  cursor.rewind();
-                  done( null );
+                  }, total, grandTotal );
                 }
-              },
-              close: function( done ){
-                cursor.close( done );
-              }
-            }, total );
+              })
+
+            }
           })
 
         } else {
@@ -259,24 +270,32 @@ var MongoMixin = declare( null, {
             if( err ){
              cb( err );
             } else {
-              cursor.count( { applySkipLimit: true }, function( err, total ){
+
+              cursor.count( function( err, grandTotal ){
                 if( err ){
                   cb( err );
                 } else {
 
-                  if( options.delete ){
+                  cursor.count( { applySkipLimit: true }, function( err, total ){
+                    if( err ){
+                      cb( err );
+                    } else {
+
+                      if( options.delete ){
                     
-                    self.collection.remove( mongoParameters.querySelector, { multi: true }, function( err ){
-                      if( err ){
-                        cb( err );
+                        self.collection.remove( mongoParameters.querySelector, { multi: true }, function( err ){
+                          if( err ){
+                            cb( err );
+                          } else {
+                            cb( null, queryDocs, total, grandTotal );
+                          }
+                        });
                       } else {
-                        cb( null, queryDocs, total );
+                        cb( null, queryDocs, total, grandTotal );
                       }
-                    });
-                  } else {
-                    cb( null, queryDocs, total );
-                  }
-                };
+                    };
+                  });
+                }
               });
 
             };
