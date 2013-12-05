@@ -18,9 +18,7 @@ var
 
 , ObjectId = mongoWrapper.ObjectId
 , checkObjectId = mongoWrapper.checkObjectId
-
 ;
-
 
 
 
@@ -46,13 +44,8 @@ var MongoMixin = declare( null, {
     // if `_id` is not explicitely defined in the schema.
     // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
     // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
-    if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
+    // if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
 
-
-    // Make sure that I have `_id: false` in the projection hash (used in all finds)
-    // if `_id` is not explicitely defined in the schema.
-    // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
-    // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
@@ -85,13 +78,17 @@ var MongoMixin = declare( null, {
           var field = fieldObject.field;
           var v = fieldObject.value;
 
+
+          // If a search is attempted on a non-searchable field, will throw
+          if( !self.searchableHash[ field ] ){
+            throw( new Error("Field " + field + " is not searchable" ) );
+          }
+
           if( self.searchableHash[ field ] && typeof( fieldObject.value ) === 'string' ){
             field = '__uc__' + field;
             v = v.toUpperCase();
           }
-
-          //TODO: Check here if searchableHash is ff -- if it is OFF, then searches on these fields should throw or quietly be dumped
-
+          
           var item = { };
           item[ field ] = {};
 
@@ -197,8 +194,8 @@ var MongoMixin = declare( null, {
     // Actually run the query 
     var cursor = self.collection.find( mongoParameters.querySelector, self.projectionHash );
 
-    // Sanitise ranges
-    saneRanges = self.sanitizeRanges( filters.ranges );
+    // Sanitise ranges if this is NOT a cursor query
+    saneRanges = self.sanitizeRanges( filters.ranges, ! options.useCursor );
 
     // Skipping/limiting according to ranges/limits
     if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
@@ -240,6 +237,7 @@ var MongoMixin = declare( null, {
                               }
                             });
                           } else {
+                             if( typeof( fields._id ) === 'undefined' )  delete obj._id;
                              done( null, obj );
                           }
                         }
@@ -281,18 +279,25 @@ var MongoMixin = declare( null, {
                       cb( err );
                     } else {
 
+                      // Cycle to work out the toDelete array _and_ get rid of the _id_
+                      // from the resultset
+                      var toDelete = [];
+                      queryDocs.forEach( function( doc ){
+                        if( options.delete ) toDelete.push( doc._id );
+                        if( typeof( self.fields._id ) === 'undefined' ) delete doc._id;
+                      });
+
+                      // If it was a delete, delete each record
+                      // Note that there is no check whether the delete worked or not
                       if( options.delete ){
-                    
-                        self.collection.remove( mongoParameters.querySelector, { multi: true }, function( err ){
-                          if( err ){
-                            cb( err );
-                          } else {
-                            cb( null, queryDocs, total, grandTotal );
-                          }
+                        toDelete.forEach( function( _id ){
+                          self.collection.remove( { _id: _id }, function( err ){ } );
                         });
-                      } else {
-                        cb( null, queryDocs, total, grandTotal );
                       }
+
+                      // That's all!
+                      cb( null, queryDocs, total, grandTotal );
+
                     };
                   });
                 }
@@ -323,8 +328,9 @@ var MongoMixin = declare( null, {
     }
 
     /*
-    // TODO: Check that I actually can get away with this this way
+    // Check that I actually can get away with this this way
     // It's Mongo: you cannot update record._id
+    // TAKEN OUT -- now _id will simply not update
     if( typeof( record._id ) !== 'undefined' ){
       return cb( new Error("You cannot update _id in MongoDb databases") );
     }
@@ -350,7 +356,7 @@ var MongoMixin = declare( null, {
     // just overwriting fields that are _actually_ present in `body`
     if( options.deleteUnsetFields ){
       Object.keys( self.fields ).forEach( function( i ){
-         if( typeof( recordToBeWritten[ i ] ) === 'undefined' ) unsetObject[ i ] = 1;
+         if( typeof( recordToBeWritten[ i ] ) === 'undefined' && i !== '_id' ) unsetObject[ i ] = 1;
       });
     }
 
@@ -425,7 +431,14 @@ var MongoMixin = declare( null, {
         if( ! options.returnRecord ){
           cb( null );
         } else {
-          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, cb);
+          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, function( err, doc ){
+            if( err ){
+              cb( err );
+            } else {
+               if( typeof( self.fields._id ) === 'undefined' ) delete doc._id;
+               cb( null, doc );
+            }
+          });
         }
       }
     });
