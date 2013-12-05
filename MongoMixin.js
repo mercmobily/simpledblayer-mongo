@@ -22,6 +22,8 @@ var
 
 
 
+
+
 var MongoMixin = declare( null, {
 
   projectionHash: {},
@@ -183,7 +185,6 @@ var MongoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-
     // Make up parameters from the passed filters
     try {
       var mongoParameters = this._makeMongoParameters( filters );
@@ -213,6 +214,7 @@ var MongoMixin = declare( null, {
             if( err ){
               cb( err );
             } else {
+
               cursor.count( { applySkipLimit: true }, function( err, total ){
                 if( err ){
                   cb( err );
@@ -233,12 +235,15 @@ var MongoMixin = declare( null, {
                               if( err ){
                                 done( err );
                               } else {
+
+                                if( typeof( self.fields._id ) === 'undefined' )  delete obj._id;
                                 done( null, obj );
                               }
                             });
                           } else {
-                             if( typeof( fields._id ) === 'undefined' )  delete obj._id;
-                             done( null, obj );
+
+                            if( obj !== null && typeof( self.fields._id ) === 'undefined' )  delete obj._id;
+                            done( null, obj );
                           }
                         }
                       });
@@ -256,11 +261,12 @@ var MongoMixin = declare( null, {
                       cursor.close( done );
                     }
                   }, total, grandTotal );
+
                 }
-              })
+              });
 
             }
-          })
+          });
 
         } else {
 
@@ -300,7 +306,8 @@ var MongoMixin = declare( null, {
 
                     };
                   });
-                }
+
+                };
               });
 
             };
@@ -326,15 +333,6 @@ var MongoMixin = declare( null, {
     } else if( typeof( options ) !== 'object' || options === null ){
       return cb( new Error("The options parameter must be a non-null object") );
     }
-
-    /*
-    // Check that I actually can get away with this this way
-    // It's Mongo: you cannot update record._id
-    // TAKEN OUT -- now _id will simply not update
-    if( typeof( record._id ) !== 'undefined' ){
-      return cb( new Error("You cannot update _id in MongoDb databases") );
-    }
-    */
 
     // Copy record over, only for existing fields
     for( var k in record ){
@@ -435,8 +433,9 @@ var MongoMixin = declare( null, {
             if( err ){
               cb( err );
             } else {
-               if( typeof( self.fields._id ) === 'undefined' ) delete doc._id;
-               cb( null, doc );
+
+              if( doc !== null && typeof( self.fields._id ) === 'undefined' ) delete doc._id;
+              cb( null, doc );
             }
           });
         }
