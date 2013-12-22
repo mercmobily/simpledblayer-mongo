@@ -485,6 +485,23 @@ var MongoMixin = declare( null, {
 
   },
 
+  makeIndex: function( keys, options ){
+    //console.log("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
+    var opt = {};
+
+    if( typeof( options ) === 'undefined' || options === null ) options = {};
+    opt.background = !!options.background;
+    opt.unique = !!options.unique;
+
+    this.collection.ensureIndex( keys, opt, function(){} );
+  },
+
+  dropAllIndexes: function( done ){
+    //console.log("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
+    var opt = {};
+
+    this.collection.dropAllIndexes( done );
+  },
 
 });
 
