@@ -37,8 +37,10 @@ var MongoMixin = declare( null, {
     self.projectionHash = {};
     self.searchableHash = {};
     Object.keys( fields ).forEach( function( field ) {
-       self.projectionHash[ field ] = true;
-       if( fields[ field ] ) self.searchableHash[ field ] = true;
+      if( fields[ field ] !== null ){
+        self.projectionHash[ field ] = true;
+        if( fields[ field ] ) self.searchableHash[ field ] = true;
+      }
          
     });
 
@@ -348,7 +350,6 @@ var MongoMixin = declare( null, {
       }
     });
 
-
     // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
     // so that partial PUTs will "overwrite" whole objects rather than
     // just overwriting fields that are _actually_ present in `body`
@@ -485,6 +486,63 @@ var MongoMixin = declare( null, {
 
   },
 
+  reposition: function( positionField, idProperty, id, moveBeforeId, cb ){
+
+    function moveElement(array, from, to) {
+      array.splice( to > from ? --to : to, 0, array.splice(from, 1)[0]);
+    }
+
+    var self = this;
+
+    //console.log("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
+
+    // Case #1: Change moveBeforeId
+    var sortParams = { };
+    sortParams[ positionField ] = 1;
+    self.select( { sort: sortParams }, function( err, data ){
+      if( err ) return cb( err );
+      //console.log("DATA BEFORE: ", data );
+
+      var from, to;
+      data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
+      //console.log("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
+      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
+        to = data.length + 1;
+        //console.log( "LENGTH OF DATA: " , data.length );
+      } else {
+        //console.log("I AM HERE?!?!? ");
+        data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
+      }
+
+      //console.log("from: ", from, ", to: ", to );
+
+      if( from === to ) return;
+
+      if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
+        //console.log("SWAPPINGGGGGGGGGGGGGG...");
+        moveElement( data, from, to);
+      }
+
+      //console.log("DATA AFTER: ", data );
+
+      // Actually change the values on the DB so that they have the right order
+      var item;
+      for( var i = 0, l = data.length; i < l; i ++ ){
+        item = data[ i ];
+
+        updateTo = {};
+        updateTo[ positionField ] = i + 100;
+        //console.log("UPDATING...");
+        self.update( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo, function(err,n){ /*console.log("ERR: " , err,n ); */} );
+        //console.log( item.name, require('util').inspect( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo , function(){} ) );
+        //console.log( updateTo );
+      };
+
+      cb( null );        
+    });     
+
+  },
+
   makeIndex: function( keys, options ){
     //console.log("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
@@ -492,6 +550,7 @@ var MongoMixin = declare( null, {
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
     opt.unique = !!options.unique;
+    if( typeof( options.name ) === 'string' )  opt.name = options.name;
 
     this.collection.ensureIndex( keys, opt, function(){} );
   },
