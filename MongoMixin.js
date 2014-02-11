@@ -20,8 +20,7 @@ var
 , checkObjectId = mongoWrapper.checkObjectId
 ;
 
-
-
+var dbRegistry = {};
 
 
 var MongoMixin = declare( null, {
@@ -29,9 +28,16 @@ var MongoMixin = declare( null, {
   projectionHash: {},
   searchableHash: {},
 
-  constructor: function( table, fields ){
+  constructor: function( table, options ){
 
     var self = this;
+
+    // Get 'options' ready
+    if( typeof( options ) === 'undefined' || options == null ) options = {};
+    if( typeof( options.fields ) === 'undefined' || options.fields == null ) options.fields = {};
+    if( typeof( options.ref ) === 'undefined' || options.ref == null ) options.ref = {};
+    
+    var fields = options.fields;
 
     // Make up the projectionHash, which is used in pretty much every query 
     self.projectionHash = {};
@@ -51,6 +57,13 @@ var MongoMixin = declare( null, {
 
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
+
+
+    console.log("CREATED DB OBJECT FOR: ", self.table, self.ref );
+       
+    
+    
+
 
   },
 
@@ -91,7 +104,7 @@ var MongoMixin = declare( null, {
             field = '__uc__' + field;
             v = v.toUpperCase();
           }
-          
+
           var item = { };
           item[ field ] = {};
 
@@ -148,7 +161,7 @@ var MongoMixin = declare( null, {
       // * Just $or conditions : { '$or': [ this, that, other ] }
       // * $and conditions with $or: { '$and': [ this, that, other, { '$or': [ blah, bleh, bligh ] } ] }
 
-   
+
       // No `$and` conditions...
       if( selector[ '$and' ].length === 0 ){
         // ...maybe there are `or` ones, which will get returned
@@ -169,7 +182,17 @@ var MongoMixin = declare( null, {
 
     };    
 
-    var sortHash = filters.sort || {}; 
+    // make sortHash
+    // If field is searchable, swap field names for _uc_ equivalent so that
+    // sorting happens regardless of upper or lower case
+    var sortHash = {};
+    for( var field  in filters.sort ) {
+      if( self.searchableHash[ field ] )  var finalField = '__uc__' + field; else finalField = field;
+      sortHash[ finalField ] = filters.sort[ field ];
+    }
+    //console.log( "FINAL SORTHASH", self.table );        
+    //console.log( require('util').inspect( sortHash, { depth: 10 } ) );        
+
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
 
@@ -222,7 +245,7 @@ var MongoMixin = declare( null, {
                 if( err ){
                   cb( err );
                 } else {
-    
+
                   cb( null, {
       
                     next: function( done ){
@@ -341,7 +364,7 @@ var MongoMixin = declare( null, {
     for( var k in record ){
       if( typeof( self.fields[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
     }
- 
+
     // Sets the case-insensitive fields
     Object.keys( self.searchableHash ).forEach( function( fieldName ){
       if( self.searchableHash[ fieldName ] ){
@@ -503,7 +526,7 @@ var MongoMixin = declare( null, {
     // Case #1: Change moveBeforeId
     var sortParams = { };
     sortParams[ positionField ] = 1;
-    self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true },  function( err, data ){
+    self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
       if( err ) return cb( err );
       //console.log("DATA BEFORE: ", data );
 
@@ -538,7 +561,7 @@ var MongoMixin = declare( null, {
         updateTo[ positionField ] = i + 100;
         //console.log("UPDATING...");
         self.update( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo, function(err,n){ /*console.log("ERR: " , err,n ); */} );
-        //console.log( item.email, require('util').inspect( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo , function(){} ) );
+        //console.log( item.name, require('util').inspect( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo , function(){} ) );
         //console.log( updateTo );
       };
 
