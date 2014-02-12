@@ -13,11 +13,20 @@ var
   dummy
 
 , declare = require('simpledeclare')
+, SimpleSchema = require('simpleschema')
 
 , MongoMixin = require('./MongoMixin.js')
 
 , mw = require('mongowrapper')
 ;
+
+
+var commonSchema = new SimpleSchema( {
+  name    : { type: 'string', searchable: true, sortable: true },
+  surname : { type: 'string', searchable: true, sortable: true },
+  age     : { type: 'number', searchable: true, sortable: true },
+  _id     : { type: 'id' },
+});
 
 
 var simpledblayerTests = require( "./lib/simpledblayer/test.js" );
@@ -44,7 +53,7 @@ var tests = simpledblayerTests.get(
     return {
 
       "mongo prep": function( test ){
-        g.mongoPeople = new g.Layer( 'mongoPeople', {  _id: true, name: true, surname: true, age: true } );
+        g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema } );
         test.ok( g.mongoPeople );
         test.done();
       },

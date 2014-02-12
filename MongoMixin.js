@@ -15,6 +15,7 @@ var
 
 , declare = require('simpledeclare')
 , mongoWrapper = require('mongowrapper')
+, async = require('async')
 
 , ObjectId = mongoWrapper.ObjectId
 , checkObjectId = mongoWrapper.checkObjectId
@@ -25,45 +26,29 @@ var dbRegistry = {};
 
 var MongoMixin = declare( null, {
 
-  projectionHash: {},
-  searchableHash: {},
+  _projectionHash: {},
+  _searchableHash: {},
+  _fieldsHash: {},
 
   constructor: function( table, options ){
 
     var self = this;
 
-    // Get 'options' ready
-    if( typeof( options ) === 'undefined' || options == null ) options = {};
-    if( typeof( options.fields ) === 'undefined' || options.fields == null ) options.fields = {};
-    if( typeof( options.ref ) === 'undefined' || options.ref == null ) options.ref = {};
-    
-    var fields = options.fields;
-
-    // Make up the projectionHash, which is used in pretty much every query 
-    self.projectionHash = {};
-    self.searchableHash = {};
-    Object.keys( fields ).forEach( function( field ) {
-      if( fields[ field ] !== null ){
-        self.projectionHash[ field ] = true;
-        if( fields[ field ] ) self.searchableHash[ field ] = true;
-      }
+    // Make up the _***Hash variables, which are used widely
+    // within the module
+    self._projectionHash = {};
+    self._searchableHash = {};
+    self._fieldsHash = {};
+ 
+    Object.keys( self.schema.structure ).forEach( function( field ) {
+      var entry = self.schema.structure[ field ];
+      self._fieldsHash[ field ] = true;
+			if( ! entry.skipProjection ) self._projectionHash[ field ] = true;
+      if( entry.searchable ) self._searchableHash[ field ] = true;
     });
-
-    // Make sure that I have `_id: false` in the projection hash (used in all finds)
-    // if `_id` is not explicitely defined in the schema.
-    // in "inclusive projections" in mongoDb, _id is added automatically and it needs to be
-    // explicitely excluded (it is, in fact, the ONLY field that can be excluded in an inclusive projection)
-    // if( typeof( fields._id ) === 'undefined' ) this.projectionHash._id = false ;
 
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
-
-
-    console.log("CREATED DB OBJECT FOR: ", self.table, self.ref );
-       
-    
-    
-
 
   },
 
@@ -96,14 +81,16 @@ var MongoMixin = declare( null, {
 
 
           // If a search is attempted on a non-searchable field, will throw
-          if( !self.searchableHash[ field ] ){
+          if( !self._searchableHash[ field ] ){
             throw( new Error("Field " + field + " is not searchable" ) );
           }
 
-          if( self.searchableHash[ field ] && typeof( fieldObject.value ) === 'string' ){
+          /*
+          if( self._searchableHash[ field ] && typeof( fieldObject.value ) === 'string' ){
             field = '__uc__' + field;
             v = v.toUpperCase();
           }
+          */
 
           var item = { };
           item[ field ] = {};
@@ -187,8 +174,8 @@ var MongoMixin = declare( null, {
     // sorting happens regardless of upper or lower case
     var sortHash = {};
     for( var field  in filters.sort ) {
-      if( self.searchableHash[ field ] )  var finalField = '__uc__' + field; else finalField = field;
-      sortHash[ finalField ] = filters.sort[ field ];
+      // if( self._searchableHash[ field ] )  var finalField = '__uc__' + field; else finalField = field;
+      sortHash[ field ] = filters.sort[ field ];
     }
     //console.log( "FINAL SORTHASH", self.table );        
     //console.log( require('util').inspect( sortHash, { depth: 10 } ) );        
@@ -217,8 +204,8 @@ var MongoMixin = declare( null, {
     }
 
     // Actually run the query 
-    var cursor = self.collection.find( mongoParameters.querySelector, self.projectionHash );
-    //console.log("FIND IN SELECT: ",  mongoParameters.querySelector, self.projectionHash );
+    var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
+    //console.log("FIND IN SELECT: ",  mongoParameters.querySelector, self._projectionHash );
 
     // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
     // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
@@ -262,14 +249,35 @@ var MongoMixin = declare( null, {
                                 done( err );
                               } else {
 
-                                if( typeof( self.fields._id ) === 'undefined' )  delete obj._id;
-                                done( null, obj );
+                                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                                self.schema.validate( obj, function( err, obj, errors ){
+
+                                  // If there is an error, end of story
+                                  // If validation fails, call callback with self.SchemaError
+                                  if( err ) return cb( err );
+                                  //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                                  done( null, obj );
+                                });
                               }
                             });
                           } else {
 
-                            if( obj !== null && typeof( self.fields._id ) === 'undefined' )  delete obj._id;
-                            done( null, obj );
+                            if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                            if( obj === null ) return done( null, obj );
+
+                            self.schema.validate( obj, function( err, obj, errors ){
+
+                              // If there is an error, end of story
+                              // If validation fails, call callback with self.SchemaError
+                              if( err ) return cb( err );
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                              done( null, obj );
+                            });
+                              
                           }
                         }
                       });
@@ -316,7 +324,7 @@ var MongoMixin = declare( null, {
                       var toDelete = [];
                       queryDocs.forEach( function( doc ){
                         if( options.delete ) toDelete.push( doc._id );
-                        if( typeof( self.fields._id ) === 'undefined' ) delete doc._id;
+                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
                       });
 
                       // If it was a delete, delete each record
@@ -327,8 +335,30 @@ var MongoMixin = declare( null, {
                         });
                       }
 
-                      // That's all!
-                      cb( null, queryDocs, total, grandTotal );
+                      var changeFunctions = [];
+                      // Validate each doc, running a validate function for each one of them in parallel
+                      queryDocs.forEach( function( doc, index ){
+
+                        changeFunctions.push( function( callback ){
+                          self.schema.validate( doc, function( err, validatedDoc, errors ){
+                            if( err ){
+                              callback( err );
+                            } else {
+
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+                              queryDocs[ index ] = validatedDoc;
+                               
+                              callback( null );
+                            }
+                          });
+                        });
+                      }); 
+                      async.parallel( changeFunctions, function( err ){
+                        if( err ) return cb( err );
+
+                        // That's all!
+                        cb( null, queryDocs, total, grandTotal );
+                      });
 
                     };
                   });
@@ -352,65 +382,82 @@ var MongoMixin = declare( null, {
     var unsetObject = {};
     var recordToBeWritten = {};
 
-    // Usual drill
-    if( typeof( cb ) === 'undefined' ){
-      cb = options;
-      options = {}
-    } else if( typeof( options ) !== 'object' || options === null ){
-      return cb( new Error("The options parameter must be a non-null object") );
-    }
+    debugger;
 
-    // Copy record over, only for existing fields
-    for( var k in record ){
-      if( typeof( self.fields[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
-    }
+    // Validate the record against the schema
+    self.schema.validate( record, function( err, record, errors ){
 
+    debugger;
+      // If there is an error, end of story
+      // If validation fails, call callback with self.SchemaError
+      if( err ) return cb( err );
+      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+      // Usual drill
+      if( typeof( cb ) === 'undefined' ){
+        cb = options;
+        options = {}
+      } else if( typeof( options ) !== 'object' || options === null ){
+        return cb( new Error("The options parameter must be a non-null object") );
+      }
+
+      // Copy record over, only for existing fields
+      for( var k in record ){
+        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
+      }
+
+    /*
     // Sets the case-insensitive fields
-    Object.keys( self.searchableHash ).forEach( function( fieldName ){
-      if( self.searchableHash[ fieldName ] ){
+    Object.keys( self._searchableHash ).forEach( function( fieldName ){
+      if( self._searchableHash[ fieldName ] ){
         if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
           recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
         }
       }
     });
+    */
 
-    // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
-    // so that partial PUTs will "overwrite" whole objects rather than
-    // just overwriting fields that are _actually_ present in `body`
-    if( options.deleteUnsetFields ){
-      Object.keys( self.fields ).forEach( function( i ){
-         if( typeof( recordToBeWritten[ i ] ) === 'undefined' && i !== '_id' ) unsetObject[ i ] = 1;
-      });
-    }
+      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
+      // so that partial PUTs will "overwrite" whole objects rather than
+      // just overwriting fields that are _actually_ present in `body`
+      if( options.deleteUnsetFields ){
+        Object.keys( self._fieldsHash ).forEach( function( i ){
+           if( typeof( recordToBeWritten[ i ] ) === 'undefined' && i !== '_id' ) unsetObject[ i ] = 1;
+        });
+      }
 
-    // Make up parameters from the passed filters
-    try {
-      var mongoParameters = this._makeMongoParameters( filters );
-    } catch( e ){
-      return cb( e );
-    }
+      // Make up parameters from the passed filters
+      try {
+        var mongoParameters = self._makeMongoParameters( filters );
+      } catch( e ){
+        return cb( e );
+      }
 
-    // If options.multi is off, then use findAndModify which will accept sort
-    if( !options.multi ){
-      self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
-        if( err ){
-          cb( err );
-        } else {
-
-          if( doc ){
-            cb( null, 1 );
+      // If options.multi is off, then use findAndModify which will accept sort
+      if( !options.multi ){
+    debugger;
+        self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
+    debugger;
+          if( err ){
+            cb( err );
           } else {
-            cb( null, 0 );
+
+            if( doc ){
+              cb( null, 1 );
+            } else {
+              cb( null, 0 );
+            }
           }
-        }
-      });
+        });
 
-    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
-    } else {
+      // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
+      } else {
 
-      // Run the query
-      self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
-    }
+    debugger;
+        // Run the query
+        self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
+      }
+    });
 
   },
 
@@ -428,43 +475,57 @@ var MongoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    // Copy record over, only for existing fields
-    for( var k in record ){
-      if( typeof( self.fields[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
-    }
 
-    // Every record in Mongo MUST have an _id field
-    if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
+    // Validate the record against the schema
+    self.schema.validate( record, function( err, record, errors ){
+
+      // If there is an error, end of story
+      // If validation fails, call callback with self.SchemaError
+      if( err ) return cb( err );
+      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+
+      // Copy record over, only for existing fields
+      for( var k in record ){
+        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
+      }
+
+      // Every record in Mongo MUST have an _id field
+      if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
+
+    /*
     // Sets the case-insensitive fields
-    Object.keys( self.searchableHash ).forEach( function( fieldName ){
-      if( self.searchableHash[ fieldName ] ){
+    Object.keys( self._searchableHash ).forEach( function( fieldName ){
+      if( self._searchableHash[ fieldName ] ){
         if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
           recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
         }
       }
     });
+    */
 
-    // Actually run the insert
-    self.collection.insert( recordToBeWritten, function( err ){
-      if( err ) {
-        cb( err );
-      } else {
-
-        if( ! options.returnRecord ){
-          cb( null );
+      // Actually run the insert
+      self.collection.insert( recordToBeWritten, function( err ){
+        if( err ) {
+          cb( err );
         } else {
-          self.collection.findOne( { _id: recordToBeWritten._id }, self.projectionHash, function( err, doc ){
-            if( err ){
-              cb( err );
-            } else {
 
-              if( doc !== null && typeof( self.fields._id ) === 'undefined' ) delete doc._id;
-              cb( null, doc );
-            }
-          });
+          if( ! options.returnRecord ){
+            cb( null );
+          } else {
+            self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+              if( err ){
+                cb( err );
+              } else {
+
+                if( doc !== null && typeof( self._fieldsHash ) === 'undefined' ) delete doc._id;
+                cb( null, doc );
+              }
+            });
+          }
         }
-      }
+      });
     });
 
   },
