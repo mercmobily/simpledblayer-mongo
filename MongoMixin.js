@@ -8,8 +8,6 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-
-
 var 
   dummy
 
@@ -20,8 +18,6 @@ var
 , ObjectId = mongoWrapper.ObjectId
 , checkObjectId = mongoWrapper.checkObjectId
 ;
-
-var dbRegistry = {};
 
 
 var MongoMixin = declare( null, {
@@ -39,7 +35,7 @@ var MongoMixin = declare( null, {
     self._projectionHash = {};
     self._searchableHash = {};
     self._fieldsHash = {};
- 
+
     Object.keys( self.schema.structure ).forEach( function( field ) {
       var entry = self.schema.structure[ field ];
       self._fieldsHash[ field ] = true;
@@ -182,6 +178,8 @@ var MongoMixin = declare( null, {
 
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
+
+
 
   select: function( filters, options, cb ){
 
@@ -382,16 +380,13 @@ var MongoMixin = declare( null, {
     var unsetObject = {};
     var recordToBeWritten = {};
 
-    debugger;
-
     // Validate the record against the schema
     self.schema.validate( record, function( err, record, errors ){
 
-    debugger;
       // If there is an error, end of story
       // If validation fails, call callback with self.SchemaError
       if( err ) return cb( err );
-      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
 
       // Usual drill
       if( typeof( cb ) === 'undefined' ){
@@ -435,9 +430,7 @@ var MongoMixin = declare( null, {
 
       // If options.multi is off, then use findAndModify which will accept sort
       if( !options.multi ){
-    debugger;
         self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
-    debugger;
           if( err ){
             cb( err );
           } else {
@@ -453,11 +446,28 @@ var MongoMixin = declare( null, {
       // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
       } else {
 
-    debugger;
         // Run the query
         self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
       }
     });
+
+  },
+
+
+  _autoLoad: function( layer, record, cb ){
+
+    var self = this;
+
+    console.log( "************************* DOING AUTOLOAD FOR: ", layer.table, layer );
+
+    // Nothing to autoload, end of story
+    if( Object.keys( layer.autoLoadTablesHash ).length == 0 ) return cb( null, record );
+
+    
+
+    
+
+    cb( null, record ); 
 
   },
 
@@ -483,7 +493,7 @@ var MongoMixin = declare( null, {
       // If there is an error, end of story
       // If validation fails, call callback with self.SchemaError
       if( err ) return cb( err );
-      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
 
 
       // Copy record over, only for existing fields
@@ -511,19 +521,25 @@ var MongoMixin = declare( null, {
           cb( err );
         } else {
 
-          if( ! options.returnRecord ){
-            cb( null );
-          } else {
-            self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
-              if( err ){
-                cb( err );
-              } else {
 
-                if( doc !== null && typeof( self._fieldsHash ) === 'undefined' ) delete doc._id;
-                cb( null, doc );
-              }
-            });
-          }
+          self._autoLoad( self, record, function( err, record ){
+
+            
+
+            if( ! options.returnRecord ){
+              cb( null );
+           } else {
+              self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+                if( err ){
+                  cb( err );
+                } else {
+
+                  if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                  cb( null, doc );
+                }
+              });
+            }
+          });
         }
       });
     });

@@ -14,6 +14,7 @@ var
 
 , declare = require('simpledeclare')
 , SimpleSchema = require('simpleschema')
+, SimpleSchemaMongo = require('simpleschema-mongo')
 
 , MongoMixin = require('./MongoMixin.js')
 
@@ -21,11 +22,13 @@ var
 ;
 
 
-var commonSchema = new SimpleSchema( {
+var SchemaMixin = declare( [ SimpleSchema, SimpleSchemaMongo ] );
+
+var commonSchema = new SchemaMixin( {
   name    : { type: 'string', searchable: true, sortable: true },
   surname : { type: 'string', searchable: true, sortable: true },
   age     : { type: 'number', searchable: true, sortable: true },
-  _id     : { type: 'id' },
+  _id     : { type: 'id', searchable: true },
 });
 
 
@@ -38,7 +41,7 @@ var tests = simpledblayerTests.get(
       if( err ){
         throw new Error("MongoDB connect: could not connect to database");
       } else {
-        done( null, db, MongoMixin );
+        done( null, db, SchemaMixin, MongoMixin );
       }
     });
   },
@@ -53,6 +56,7 @@ var tests = simpledblayerTests.get(
     return {
 
       "mongo prep": function( test ){
+
         g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema } );
         test.ok( g.mongoPeople );
         test.done();
