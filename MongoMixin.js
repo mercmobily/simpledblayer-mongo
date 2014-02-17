@@ -453,25 +453,29 @@ var MongoMixin = declare( null, {
   },
 
 
-  _makeAutoLoadFake: function( layer, record, childTable, resultObject, cb ){
-    console.log("FAKE AUTOLOAD CALLED",  layer.table, record, childTable, resultObject);
-    cb( null );
-  },
-
-  _makeAutoLoad: function( layer, record, childTable, resultObject, cb ){
+  _makeAutoLoad: function( layer, record, childTable, currentObject, v, cb ){
 
     var self = this;
 
     // If resultObject is null, then it's the "root" record: set resultObject to its
     // _autoLoad key
-    if( resultObject === null ){
-      if( typeof( record._autoLoad ) === 'undefined' ) record._autoLoad = {};
-      resultObject = record._autoLoad;
+    //if( resultObject === null ){
+
+
+    // If called with just 4 parameters, it's the first time -- initialise currentObject and v
+    if( typeof( currentObject ) === 'function' ){
+      cb = currentObject;
+
+      v = {};
+      v.resultObject = [];
+
+      currentObject = v.resultObject;
+      console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
     }
 
     //console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
 
-    var childTableData = layer.childrenTablesHash[ childTable ]; // has `layer` and `nestedParams`
+    var childTableData = layer.childrenTablesHash[ childTable ]; // Has `layer` and `nestedParams`
     var andConditionsArray = [];
        
     Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
@@ -480,7 +484,7 @@ var MongoMixin = declare( null, {
       andConditionsArray.push( { field: joinKey, type: 'eq', value: record[ joinValue ] } );
     });
 
-    resultObject[ childTable ] = [];
+    //v.currentObject[ childTable ] = [];
     //console.log("ABOUT TO MAKE THE QUERY: ", andConditionsArray  );
 
     childTableData.layer.select( { conditions: { and: andConditionsArray } }, function( err, res, total ){
@@ -496,12 +500,14 @@ var MongoMixin = declare( null, {
         res,
 
         function( item, cb ){
+
+          currentObject.push( item );
           item._autoLoad = {};
-          resultObject[ childTable ].push( item );
-  
+          //resultObject[ childTable ].push( item );
+ 
           //console.log("RECORD ADDED:", item );
           ////console.log("ADDED TO (main):", resultObject );
-          //console.log("ADDED TO [childTable]:", resultObject[ childTable ]  );
+          ////console.log("ADDED TO [childTable]:", resultObject[ childTable ]  );
           //console.log('SCANNING SUBTABLES FOR MORE:'  );
   
           async.eachSeries(
@@ -510,10 +516,13 @@ var MongoMixin = declare( null, {
   
               //console.log("FOUND: ", recordSubTableKey );
   
+              item._autoLoad[ recordSubTableKey ] = [];
+
               var recordSubTableData = childTableData.layer.childrenTablesHash[ recordSubTableKey ]
   
-              // Runs autoload again on the children
-              self._makeAutoLoad( childTableData.layer, item, recordSubTableKey, item._autoLoad, function( err ){
+              // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
+              // as the currentObject, and re-passing the v object (containing the end result)
+              self._makeAutoLoad( childTableData.layer, item, recordSubTableKey, item._autoLoad[ recordSubTableKey ], v, function( err ){
                 if( err ) return cb( err );
   
                 cb( null );
@@ -530,7 +539,7 @@ var MongoMixin = declare( null, {
           if( err ) return cb( err );
 
           //console.log("SCANNING OF RECORDS FINISHED." );
-          cb( null );
+          cb( null, v.resultObject );
         }
       );
 
@@ -538,42 +547,59 @@ var MongoMixin = declare( null, {
 
   },
 
-  _cacheAutoLoad: function( record, cb ){
+  _updateParentsAutoLoad: function( layer, record, cb ){
 
     var self = this;
 
-    /*
+    console.log("CALLED _updateParentsAutoLoad for ", layer.table ); 
 
-    //console.log("TABLES TO BE ALERTED:", self.table, record, self.toBeAlertedTablesHash );
-    console.log("+++++++++++++PARENT TABLES FOR:", self.table );
+    async.eachSeries(
+      Object.keys( layer.parentTablesHash ),
+      function( parentTableKey, cb ){
 
-    Object.keys( self.parentTablesHash ).forEach( function( key ){
+        console.log("PARENT KEY: ", parentTableKey );
+        var parentTableData = layer.parentTablesHash[ parentTableKey ];
+
+        var parentLayer = parentTableData.layer;
+        var nestedParams = parentTableData.nestedParams;
+
+        var andConditionsArray = [];
+        Object.keys( nestedParams.join ).forEach( function( joinKey ){
+          andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
+
+          //parentFilter[ nestedParams.join[ joinKey ] ] = record[ joinKey ];
+        });
+        console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", layer.table, "FOR RECORD MATCHING", andConditionsArray );
       
-      var parentTableObject = self.parentTablesHash[ key ];
-      var parentLayer = parentTableObject.layer;
-      var nestedParams = parentTableObject.nestedParams;
+        parentLayer.select( { conditions: { and: andConditionsArray } }, function( err, parentRecord, total ){
+          if( err ) return cb( err );
+          if( total > 1 ) return cb( new Error("PROBLEM: more than 1 parent in " + parentLayer.table + " for record " + record ) );
 
-      console.log("TABLE NAME OF PARENT: ", key );
-      // console.log("LAYER OF PARENT: ", parentLayer );
-      // console.log("AND NESTERPARAMS TO GET FIELDS:", nestedParams );
+          // Update cache field in parent (need parent filter AND record)
+          // Run self on parent layer/parent record
+
+          console.log("PARENT RECORD:", parentRecord[ 0 ] );
+          //console.log(' self._makeAutoLoad( ', parentLayer.table, parentRecord, layer.table, ')' );
+          self._makeAutoLoad( parentLayer, parentRecord[ 0 ], layer.table, function( err, res ){
+            if( err ) return cb( err );
+            console.log("AND THE autoLoad data is:", res );
 
 
-      // Work out how to get the parent's record, basing filter on join fields
-      var parentFilter = {};
+            /* TODO:  JUST UPDATE THE RECORD WITH THE NEW autoLoad STUFF AND IT'S DONE!!! */
 
-      Object.keys( nestedParams.join ).forEach( function( localKey ){
-        parentFilter[ nestedParams.join[ localKey ] ] = record[ localKey ];
-      });
-      
-      console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", self.table, "FOR RECORD MATCHING", parentFilter );
+            cb( null );
 
-      self._writeAutoLoad( parentLayer, parentFilter, self.table, function( err ){} );
+          });
 
-    });    
+        });
+      },
 
-    */    
+      function( err ){
+        if( err ) return cb( err );
+        cb( null );
+      }
+    );
 
-    cb( null, record );
   },
 
 
@@ -627,7 +653,7 @@ var MongoMixin = declare( null, {
           cb( err );
         } else {
 
-          self._cacheAutoLoad( record, function( err, record ){
+          self._updateParentsAutoLoad( self, record, function( err, record ){
 
             if( ! options.returnRecord ){
               cb( null );
