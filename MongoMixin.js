@@ -453,40 +453,54 @@ var MongoMixin = declare( null, {
   },
 
 
-  _makeAutoLoad: function( layer, record, childTable, currentObject, v, cb ){
+  _toUpperCaseRecord: function( record ){
+    for( var k in record ){
+      if( typeof( record[ k ] ) === 'string' ) record[ k ] = record[ k ].toUpperCase();
+    }
+  },
+
+  _getChildrenData: function( record, childTable, params, currentObject, v, cb ){
 
     var self = this;
+    var layer = this;
 
-    // If resultObject is null, then it's the "root" record: set resultObject to its
-    // _autoLoad key
-    //if( resultObject === null ){
+    // Paranoid check on params, want it as an object
+    if( typeof( params ) !== 'object' || params === null ) params = {};
 
-
-    // If called with just 4 parameters, it's the first time -- initialise currentObject and v
+    // If called with just 4 parameters, it's the first time -- initialise currentObject and v, which are
+    // the "global" variables for this recursive functon
     if( typeof( currentObject ) === 'function' ){
       cb = currentObject;
 
       v = {};
       v.resultObject = [];
-
       currentObject = v.resultObject;
-      console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
+      
+      // console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
     }
 
     //console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
 
+
+    // ************************************************
+    // PHASE 1: QUERY THE CHILD TABLE BASED ON THE
+    //          RECORD'S IDs FOR JOIN
+    // ************************************************
+
+    // Get information about the child table soon to be queried
     var childTableData = layer.childrenTablesHash[ childTable ]; // Has `layer` and `nestedParams`
+
+    // Make the conditions array to make the right query based on the join
     var andConditionsArray = [];
-       
     Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
 
       var joinValue = childTableData.nestedParams.join[ joinKey ];
       andConditionsArray.push( { field: joinKey, type: 'eq', value: record[ joinValue ] } );
     });
 
-    //v.currentObject[ childTable ] = [];
     //console.log("ABOUT TO MAKE THE QUERY: ", andConditionsArray  );
 
+    // Go through the records in child table
     childTableData.layer.select( { conditions: { and: andConditionsArray } }, function( err, res, total ){
       if( err ) return cb( err );
 
@@ -495,34 +509,48 @@ var MongoMixin = declare( null, {
 
       var childrenTablesHash = Object.keys( childTableData.layer.childrenTablesHash );
 
+
+      // ************************************************
+      // PHASE 2: ADD EACH FETCHED RECORD TO THE
+      //          _children KEY IN THE DB
+      // ************************************************
+
       // For each result, add them to resultObject
       async.eachSeries(
         res,
 
         function( item, cb ){
 
+          // Make it uppercase if so required by the parameter
+          if( params.upperCase ) self._toUpperCaseRecord( item );
+
           currentObject.push( item );
-          item._autoLoad = {};
+          item[ params.field ] = {};
           //resultObject[ childTable ].push( item );
  
           //console.log("RECORD ADDED:", item );
           ////console.log("ADDED TO (main):", resultObject );
           ////console.log("ADDED TO [childTable]:", resultObject[ childTable ]  );
           //console.log('SCANNING SUBTABLES FOR MORE:'  );
-  
+ 
+          // ****************************************************
+          // PHASE 3: FOR EACH CHILD TABLE OF THE CURRENT RECORD,
+          //          RUN _getChildrenData()
+          // ****************************************************
+ 
           async.eachSeries(
             Object.keys( childTableData.layer.childrenTablesHash ),
             function( recordSubTableKey, cb ){
   
               //console.log("FOUND: ", recordSubTableKey );
   
-              item._autoLoad[ recordSubTableKey ] = [];
+              item[ params.field ] [ recordSubTableKey ] = [];
 
               var recordSubTableData = childTableData.layer.childrenTablesHash[ recordSubTableKey ]
   
               // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
               // as the currentObject, and re-passing the v object (containing the end result)
-              self._makeAutoLoad( childTableData.layer, item, recordSubTableKey, item._autoLoad[ recordSubTableKey ], v, function( err ){
+              childTableData.layer._getChildrenData( item, recordSubTableKey, params, item[ params.field][ recordSubTableKey ], v, function( err ){
                 if( err ) return cb( err );
   
                 cb( null );
@@ -547,17 +575,24 @@ var MongoMixin = declare( null, {
 
   },
 
-  _updateParentsAutoLoad: function( layer, record, cb ){
+  _updateParentsChildren: function( record, params, cb ){
 
     var self = this;
+    var layer = this;
 
-    console.log("CALLED _updateParentsAutoLoad for ", layer.table ); 
+    //console.log("CALLED _updateParentsChildren for ", layer.table ); 
+    
+    // Paranoid check on params, want it as an object
+    if( typeof( params ) !== 'object' || params === null ) params = {};
+    
+    // The storage field is _children by default
+    if( typeof( params.field ) !== 'string' ) params.field = '_children';
 
     async.eachSeries(
       Object.keys( layer.parentTablesHash ),
       function( parentTableKey, cb ){
 
-        console.log("PARENT KEY: ", parentTableKey );
+        //console.log("PARENT KEY: ", parentTableKey );
         var parentTableData = layer.parentTablesHash[ parentTableKey ];
 
         var parentLayer = parentTableData.layer;
@@ -569,25 +604,40 @@ var MongoMixin = declare( null, {
 
           //parentFilter[ nestedParams.join[ joinKey ] ] = record[ joinKey ];
         });
-        console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", layer.table, "FOR RECORD MATCHING", andConditionsArray );
-      
-        parentLayer.select( { conditions: { and: andConditionsArray } }, function( err, parentRecord, total ){
+        //console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", layer.table, "FOR RECORD MATCHING", andConditionsArray );
+
+        // Make up the selectors. The first one is a simpledbschema selector, needed for
+        // the layer's select command. The second one is a straight MongoDb selector, needed for
+        // the update (made using the Mogodb driver directly)
+        var selector = { conditions: { and: andConditionsArray } }; 
+        var mongoSelector = self._makeMongoParameters( selector ).querySelector; 
+
+        parentLayer.select( selector, function( err, parentRecord, total ){
           if( err ) return cb( err );
           if( total > 1 ) return cb( new Error("PROBLEM: more than 1 parent in " + parentLayer.table + " for record " + record ) );
 
           // Update cache field in parent (need parent filter AND record)
           // Run self on parent layer/parent record
 
-          console.log("PARENT RECORD:", parentRecord[ 0 ] );
-          //console.log(' self._makeAutoLoad( ', parentLayer.table, parentRecord, layer.table, ')' );
-          self._makeAutoLoad( parentLayer, parentRecord[ 0 ], layer.table, function( err, res ){
+          //console.log("PARENT RECORD:", parentRecord[ 0 ] );
+          //console.log(' self._getChildrenData( ', parentLayer.table, parentRecord, layer.table, ')' );
+          parentLayer._getChildrenData( parentRecord[ 0 ], layer.table, params, function( err, childrenData ){
             if( err ) return cb( err );
-            console.log("AND THE autoLoad data is:", res );
+            //console.log("AND THE autoLoad data is:", childrenData );
 
+            // Create the update object for mongoDb
+            var updateObject = { '$set': {} };
+            updateObject[ '$set' ] [ params.field + '.' + layer.table ] = childrenData;
+            
+            // Update the collection with the new info, shoved in params.field
+            parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
+              if( err ) return cb( err );
 
-            /* TODO:  JUST UPDATE THE RECORD WITH THE NEW autoLoad STUFF AND IT'S DONE!!! */
+              parentLayer._updateParentsChildren( parentRecord[ 0 ], params, function( err ){
+                cb( null );
+              });
 
-            cb( null );
+            });
 
           });
 
@@ -634,6 +684,7 @@ var MongoMixin = declare( null, {
       // Every record in Mongo MUST have an _id field
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
+
     /*
     // Sets the case-insensitive fields
     Object.keys( self._searchableHash ).forEach( function( fieldName ){
@@ -646,31 +697,36 @@ var MongoMixin = declare( null, {
     */
 
       
+      // Make searchdata for the record itself, since every search will be based on
+      // _searchData
+      recordToBeWritten._searchData = {};
+      for( var k in recordToBeWritten ){
+        if( typeof( recordToBeWritten[ k ] ) === 'string' ){
+          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ].toUpperCase();
+        }
+      }
 
       // Actually run the insert
       self.collection.insert( recordToBeWritten, function( err ){
-        if( err ) {
-          cb( err );
-        } else {
+        if( err )  return cb( err );
 
-          self._updateParentsAutoLoad( self, record, function( err, record ){
+        self._updateParentsChildren( record, { upperCase: true, field: '_searchData' }, function( err ){
+          if( err ) return cb( err );
 
-            if( ! options.returnRecord ){
-              cb( null );
-            } else {
-              self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
-                if( err ){
-                  cb( err );
-                } else {
+          self._updateParentsChildren( record, { upperCase: false, field: '_children' }, function( err ){
+            if( err ) return cb( err );
 
-                  if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-                  cb( null, doc );
-                }
-              });
-            }
+            if( ! options.returnRecord ) return cb( null );
+
+            self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+              if( err ) return cb( err );
+
+              if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+              cb( null, doc );
+            });
           });
-
-        };
+        });
       });
     });
 
