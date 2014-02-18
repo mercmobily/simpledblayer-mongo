@@ -552,6 +552,8 @@ var MongoMixin = declare( null, {
               // as the currentObject, and re-passing the v object (containing the end result)
               childTableData.layer._getChildrenData( item, recordSubTableKey, params, item[ params.field][ recordSubTableKey ], v, function( err ){
                 if( err ) return cb( err );
+
+                if( item[ params.field][ recordSubTableKey ].length === 0 ) delete item[ params.field][ recordSubTableKey ];
   
                 cb( null );
               });
@@ -598,6 +600,11 @@ var MongoMixin = declare( null, {
         var parentLayer = parentTableData.layer;
         var nestedParams = parentTableData.nestedParams;
 
+        // If this is only to load in autoload, and autoload is off for this join,
+        // then quit it here
+        if( ! nestedParams.autoload && params.ifAutoload ) return cb( null );
+
+        // Work out the select conditions based on the join
         var andConditionsArray = [];
         Object.keys( nestedParams.join ).forEach( function( joinKey ){
           andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
@@ -606,12 +613,15 @@ var MongoMixin = declare( null, {
         });
         //console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", layer.table, "FOR RECORD MATCHING", andConditionsArray );
 
+
         // Make up the selectors. The first one is a simpledbschema selector, needed for
         // the layer's select command. The second one is a straight MongoDb selector, needed for
         // the update (made using the Mogodb driver directly)
         var selector = { conditions: { and: andConditionsArray } }; 
         var mongoSelector = self._makeMongoParameters( selector ).querySelector; 
 
+        // Actually run the select to get the parent record. It can only be 1, or there is
+        // a problem with the database
         parentLayer.select( selector, function( err, parentRecord, total ){
           if( err ) return cb( err );
           if( total > 1 ) return cb( new Error("PROBLEM: more than 1 parent in " + parentLayer.table + " for record " + record ) );
@@ -713,7 +723,7 @@ var MongoMixin = declare( null, {
         self._updateParentsChildren( record, { upperCase: true, field: '_searchData' }, function( err ){
           if( err ) return cb( err );
 
-          self._updateParentsChildren( record, { upperCase: false, field: '_children' }, function( err ){
+          self._updateParentsChildren( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
             if( err ) return cb( err );
 
             if( ! options.returnRecord ) return cb( null );
