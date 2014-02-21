@@ -405,17 +405,6 @@ var MongoMixin = declare( null, {
         if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
       }
 
-    /*
-    // Sets the case-insensitive fields
-    Object.keys( self._searchableHash ).forEach( function( fieldName ){
-      if( self._searchableHash[ fieldName ] ){
-        if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
-          recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
-        }
-      }
-    });
-    */
-
       // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
       // so that partial PUTs will "overwrite" whole objects rather than
       // just overwriting fields that are _actually_ present in `body`
@@ -466,63 +455,124 @@ var MongoMixin = declare( null, {
     }
   },
 
-  _getChildrenData: function( record, childTable, params, currentObject, v, cb ){
 
-/*
- 
-  TODO:
-  * Document _getChildrenData()
-  * Make sure debugging output is easy to follow
-  * Improve code for tests, avoid duplications, add tests for multiple tables with lookup, and update/delete
-*/
+  // This function goes through the child tables, and runs
+  // _getChildrenData for each 
+  completeRecord: function( record, params, cb ){
 
     var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+
+    console.log( "\n");
+    console.log( rnd, "ENTRY: completeRecord for ",  self.table, ' => ', record );
+
+    // The layer is the object from which the call is made
     var layer = this;
+
+    console.log( rnd, "Cycling through: ", Object.keys( layer.childrenTablesHash )  );
+
+    // This should go in the right spot, right here. And not IN the cycle zapping
+    // the previous values every time. Oh boy.
+    record[ params.field ] = {};
+
+    async.eachSeries(
+      Object.keys( layer.childrenTablesHash ),
+      function( childTableKey, cb ){
+     
+        var childTableData = layer.childrenTablesHash[ childTableKey ];
+
+        console.log( rnd, "Working on ", childTableData.layer.table );
+
+        // Since there can be several fields pointing to the same
+        // lookup table (e.g. `personId`, `nextOfKinId` in the same table),
+        // nestedParams should contain `loadAs` which is the spot where the information
+        // will be placed. If not, it falls back to the layer's name.
+        // Note that it cannot fallback to the record's name, since the join
+        // can have several elements and would be ambiguous.
+        var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
+
+        console.log( rnd, "Entries will be placed in key:", loadAs );
+
+        console.log( rnd, "Getting children data in child table ", childTableKey," for record", record );
+
+        // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
+        // as the currentObject, and re-passing the v object (containing the end result)
+        layer._getChildrenData( record, childTableKey, params, function( err, childrenData ){
+          if( err ) return cb( err );
+
+          
+          console.log( rnd, "Extra information will be stored in records[", params.field , " ] where record is", record );
+
+
+          switch( childTableData.nestedParams.type ){
+            case 'lookup':
+              console.log( rnd, "Its a lookup. Doing: record[ params.field ][ loadAs ] = childrenData[ loadAs ] ");
+              console.log( rnd, "Note that childrenData is:", childrenData );
+              if( childrenData[ loadAs ] ) record[ params.field ][ loadAs ] = childrenData[ loadAs ]; 
+            break;
+
+            case 'multiple':
+              console.log( rnd, "Its a multiple. Doing: record[ params.field ][ loadAs ] = childrenData");
+              if( childrenData.length ) record[ params.field ][ loadAs ] = childrenData; 
+            break;
+
+            default:
+              cb( new Error( "Parameter 'type' needs to be 'lookup' or 'multiple' " ) );
+            break;
+          }
+
+          console.log( rnd, "Record, which should be growing, is now: ", record );
+
+          cb( null );
+        });
+      },
+      function( err ){
+        if( err ) cb( err );
+       
+				console.log( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
+ 
+        cb( null );
+      }
+    );
+
+  },
+  
+
+  _getChildrenData: function( record, childTable, params, cb ){
+
+    var self = this;
+
+    // The layer is the object from which the call is made
+    var layer = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _getChildrenData for ", childTable, ' => ', record );
+
+    // Little detail forgotten by accident
+    var resultObject;
 
     // Paranoid check on params, want it as an object
     if( typeof( params ) !== 'object' || params === null ) params = {};
 
+    var childTableData = layer.childrenTablesHash[ childTable ]; 
 
-    // If called with just 4 parameters, it's the first time -- initialise currentObject and v, which are
-    // the "global" variables for this recursive functon
-    if( typeof( currentObject ) === 'function' ){
+    // If it's a lookup, it will be v directly. This will cover cases where a new call
+    // is made straight on the lookup
+    switch( childTableData.nestedParams.type ){
 
-      //console.log("\n\n\n\n\n\n\n\n");
-      console.log("This is an ORIGINAL call to MAKEAUTOLOAD");
-      console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
+      case 'multiple':
+        console.log( rnd, "childTable to be considered is of type MULTIPLE" );
+        resultObject = [];
+      break;
 
-      cb = currentObject;
-
-      // If the child is a multipe item, the currentObject will be initialised
-      // as an array.
-      // If it's a lookup, it will be v directly. This will cover cases where a new call
-      // is made straight on the lookup
-      switch( layer.childrenTablesHash[ childTable ].nestedParams.type ){
-
-        case 'multiple':
-          //console.log("childTable to be considered is of type MULTIPLE");
-          v = { resultObject: [] };
-          currentObject = v.resultObject;
-        break;
-
-        case 'lookup':
-          //console.log("childTable to be considered is of type LOOKUP");
-          v = { resultObject: {} };
-          currentObject = v.resultObject;
-        break;
-      }
+      case 'lookup':
+        console.log( rnd, "childTable to be considered is of type LOOKUP" );
+        resultObject = {};
+      break;
     }
 
-
-    //console.log("MAKEAUTOLOAD CALLED FOR ", layer.table, "WILL HAVE TO LOAD RECORDS IN", childTable, "FOR RECORD", record );
-
-    // ************************************************
-    // PHASE 1: QUERY THE CHILD TABLE BASED ON THE
-    //          RECORD'S IDs FOR JOIN
-    // ************************************************
-
-    // Get information about the child table soon to be queried
-    var childTableData = layer.childrenTablesHash[ childTable ]; // Has `layer` and `nestedParams`
 
     // Make the conditions array to make the right query based on the join
     var andConditionsArray = [];
@@ -530,187 +580,72 @@ var MongoMixin = declare( null, {
       var joinValue = childTableData.nestedParams.join[ joinKey ];
       andConditionsArray.push( { field: joinKey, type: 'eq', value: record[ joinValue ] } );
     });
-
-    // Go through the records in child table
    
-    //console.log("TYPE OF CHILD: ", childTableData.nestedParams.type, "CONDITIONS ON childTableData.layer: ", childTableData.layer.table, andConditionsArray," DERIVED FROM JOIN: ", childTableData.nestedParams.join );
+    console.log( rnd, "Running the select...", andConditionsArray );
 
-    switch( childTableData.nestedParams.type ){
+    // Runs the query, which will get the children element for that
+    // child table depending on the join
+    childTableData.layer.select( { conditions: { and: andConditionsArray } }, function( err, res, total ){
+      if( err ) return cb( err );
 
-      case 'lookup':
+      console.log( rnd, "Records fetched:", total, res );
+   
+      // For each result, add them to resultObject
+      async.eachSeries(
+        res,
+    
+        function( item, cb ){
 
-        //console.log("RUNNING THE SELECT FOR THE LOOKUP IN TABLE", childTableData.layer.table );
-        childTableData.layer.select( { conditions: { and: andConditionsArray }, ranges: { limit: 1 } }, function( err, res, total ){
+          console.log( rnd, "Considering item:", item );
+   
+          // Make the record uppercase if so required
+          if( params.upperCase ){
+            console.log( rnd, "UpperCasing the item as requested by params");
+            self._toUpperCaseRecord( item );
+          }
+
+          // Assign the loaded item to the resultObject
+          // making sure that it's in the right spot (depending on the type)
+          switch( childTableData.nestedParams.type ){
+            case 'lookup':
+             var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
+             console.log( rnd, "Item is a lookup, assigning resultobject[ ", loadAs,' ] to ', resultObject );
+             resultObject[ loadAs ] = item;
+            break;
+            case 'multiple':
+              console.log( rnd, "Item is of type multiple, pushing it to", resultObject );
+              resultObject.push( item );
+            break;
+            default:
+              cb( new Error( "Parameter 'type' needs to be 'lookup' or 'multiple' " ) );
+            break;
+          };
+
+          console.log( rnd, "resultObject after the cure is:", resultObject );
+          console.log( rnd, "Item is now ready to be completed. Requesting completion:", childTableData.layer.table, "->", item );
+
+          // It's time to complete the record with children information
+          childTableData.layer.completeRecord( item, params, function( err ){
+            if( err ) cb( err );
+
+            console.log( rnd, "Item after completion is:", childTableData.layer.table, "->", require('util').inspect( item, { depth: 8 } ) );
+
+            cb( null );
+          }); 
+            
+
+        },
+
+        function( err ){
           if( err ) return cb( err );
 
-          //console.log("FETCHED RECORDS FROM LOOKUP: ", total, res );
+          console.log( rnd, "EXIT: End of function. Returning:", require('util').inspect( resultObject, { depth: 5 }  ) );
 
-          if( ! total ) return cb( null );
+          cb( null, resultObject );
+        }
+      ) // async.series
 
-          var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
-
-          currentObject[ loadAs ] = res[ 0 ];
-          //console.log("CURRENT OBJECT AFTER THIS:", currentObject );
-          //console.log("(PARTIAL) RESULT OBJECT:", v.resultObject );
-
-          /*
-            TODO:
-              GET THE CHILDREN OF THE childTableData.childrenTablesHash
-
-
-DO SOMETHING LIKE THAT:
-*/
-
-              var item = currentObject[ loadAs ];
-              item[ params.field ] = {};
-
-              async.eachSeries(
-                Object.keys( childTableData.layer.childrenTablesHash ),
-                function( recordSubTableKey, cb ){
-      
-                  console.log("FOUND A CHILD TABLE: ", recordSubTableKey );
-     
-                  var recordSubTable = childTableData.layer.childrenTablesHash[ recordSubTableKey ];
- 
-                  var nextCurrentObject;
-                  switch( recordSubTable.nestedParams.type ){
-                     case 'multiple':
-                       console.log("THE SUBTABLE HAS MULTIPLE RECORDS", item, params.field, recordSubTableKey);
-                       item[ params.field ] [ recordSubTableKey ] = [];
-                       nextCurrentObject = item[ params.field ] [ recordSubTableKey ];
-                        
-                     break;
-                     case 'lookup':
-                       console.log("THE SUBTABLE IS A LOOKUP");
-                       nextCurrentObject = item[ params.field ];
-                     break;
-                  } 
-    
-                  // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
-                  // as the currentObject, and re-passing the v object (containing the end result)
-                  childTableData.layer._getChildrenData( item, recordSubTableKey, params, nextCurrentObject, v, function( err ){
-                    if( err ) return cb( err );
-    
-                    if( Array.isArray( item[ params.field][ recordSubTableKey ] ) && item[ params.field][ recordSubTableKey ].length === 0 )
-                      delete item[ params.field][ recordSubTableKey ];
-      
-                    cb( null );
-                  });
-                },
-                function( err ){
-                  if( err ) cb( err );
-                  console.log("SUB SCAN FINISHED");
-                  return cb( null, v.resultObject );
-                }
-              );
-
-        });
-
-      break;
-
-      case 'multiple':
- 
-        //console.log("RUNNING THE SELECT FOR THE MULTIPLE SUBRECORDS" );
-        childTableData.layer.select( { conditions: { and: andConditionsArray } }, function( err, res, total ){
-          if( err ) return cb( err );
-    
-          //console.log("FETCHED RECORDS FROM MULTIPLE SELECT: ", total, res );
-    
-          var childrenTablesHash = Object.keys( childTableData.layer.childrenTablesHash );
-    
-    
-          // ************************************************
-          // PHASE 2: ADD EACH FETCHED RECORD TO THE
-          //          _children KEY IN THE DB
-          // ************************************************
-   
-          //console.log("\n\n\nENTERING CYCLING OF FETCHED RECORDS IN", childTableData.layer.table );
- 
-          // For each result, add them to resultObject
-          async.eachSeries(
-            res,
-    
-            function( item, cb ){
-    
-              //console.log("\nRECORD BEING CONSIDERED FOR ", childTableData.layer.table,":", item );
-
-              // Make it uppercase if so required by the parameter
-              if( params.upperCase ){
-                //console.log("PARAM SAYS 'uppercase', so uppercasing...");
-                self._toUpperCaseRecord( item );
-              }
-    
-              currentObject.push( item );
-              item[ params.field ] = {};
-              //resultObject[ childTable ].push( item );
-     
-              ////console.log("ADDED TO (main):", resultObject );
-              ////console.log("ADDED TO [childTable]:", resultObject[ childTable ]  );
-              //console.log('SCANNING SUBTABLES FOR MORE:'  );
-     
-              // ****************************************************
-              // PHASE 3: FOR EACH CHILD TABLE OF THE CURRENT RECORD,
-              //          RUN _getChildrenData()
-              // ****************************************************
-     
-              async.eachSeries(
-                Object.keys( childTableData.layer.childrenTablesHash ),
-                function( recordSubTableKey, cb ){
-      
-                  //console.log("FOUND A CHILD TABLE: ", recordSubTableKey );
-     
-                  var recordSubTable = childTableData.layer.childrenTablesHash[ recordSubTableKey ];
- 
-                  var nextCurrentObject;
-                  //switch( childTableData.nestedParams.type ){
-                  switch( recordSubTable.nestedParams.type ){
-                     case 'multiple':
-                       //console.log("THE SUBTABLE HAS MULTIPLE RECORDS");
-                       item[ params.field ] [ recordSubTableKey ] = [];
-                       nextCurrentObject = item[ params.field ] [ recordSubTableKey ];
-                        
-                     break;
-                     case 'lookup':
-                       //console.log("THE SUBTABLE IS A LOOKUP");
-                       nextCurrentObject = item[ params.field ];
-                     break;
-                  } 
-    
-                  // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
-                  // as the currentObject, and re-passing the v object (containing the end result)
-                  childTableData.layer._getChildrenData( item, recordSubTableKey, params, nextCurrentObject, v, function( err ){
-                    if( err ) return cb( err );
-    
-                    if( Array.isArray( item[ params.field][ recordSubTableKey ] ) && item[ params.field][ recordSubTableKey ].length === 0 )
-                      delete item[ params.field][ recordSubTableKey ];
-      
-                    cb( null );
-                  });
-                },
-                function( err ){
-                  if( err ) cb( err );
-                  //console.log("SUB SCAN FINISHED");
-                  cb( null );
-                }
-              );
-            },
-            function( err ){
-              if( err ) return cb( err );
-    
-              //console.log("SCANNING OF RECORDS FINISHED." );
-              cb( null, v.resultObject );
-            }
-          );
-    
-        });
-      break;
-
-      default:
-        cb( new Error( "Parameter 'type' needs to be 'single' or 'multiple' " ) );
-      break;
-
-    } // CASE
-
+    })
   },
 
 
@@ -723,13 +658,16 @@ DO SOMETHING LIKE THAT:
 
     var layer = this;
     var self = this;
-    //console.log("CALLED _updateSelfAndParentsChildren for ", layer.table ); 
     
     // Paranoid checks and sane defaults for params
     if( typeof( params ) !== 'object' || params === null ) params = {};
     if( typeof( params.field ) !== 'string' ) params.field = '_children';
 
-    console.log( '_updateSelfAndParentsChildren called: ', layer.table, record, params );
+    var rnd = Math.floor(Math.random()*100 );
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _updateSelfWithLookups for ", layer.table, ' => ', record );
+
+    console.log( rnd, "Cycling through: ", Object.keys( layer.lookupChildrenTablesHash ),", the children of tyle 'lookup'"  );
 
     // Cycle through each lookup child of the current layer
     async.eachSeries(
@@ -737,14 +675,15 @@ DO SOMETHING LIKE THAT:
       function( childTableKey, cb ){
         var childTableData = layer.lookupChildrenTablesHash[ childTableKey ];
 
-        console.log("I WOULD NOW GO THROUGH", childTableData.layer.table );
-        console.log( "RECORD: ", record, "CHILD TABLE:", childTableKey, "PARAMS:", params );
-        
+        console.log( rnd, "Working on ", childTableData.layer.table );
+
+        console.log( rnd, "Getting children data in child table ", childTableKey," for record", record );
+
         // Get children data for that child table
         layer._getChildrenData( record, childTableKey, params, function( err, childData ){
           if( err ) return cb( err );
 
-          console.log("AND I WOULD FIND:", childData );
+          console.log( rnd, "The childrenData data is:", childData );
 
 					var nestedParams = childTableData.nestedParams;
           var childLayer = childTableData.layer;
@@ -764,11 +703,12 @@ DO SOMETHING LIKE THAT:
             }
 
           });
-          console.log("AND CONDITIONS:" , andConditionsArray );
+
+          console.log( rnd, "Abort is:", abort, "as the conditions were", andConditionsArray );
 
           // If the record doesn't have _all_ lookup fields, abort and fail miserably
           if( abort ){
-            console.log("The record doesn't have all lookup fields, aborting...");
+            console.log( rnd, "The record doesn't have all lookup fields, aborting...");
             return cb( null );
           }
 
@@ -781,11 +721,15 @@ DO SOMETHING LIKE THAT:
           // If loadAs is not defined, as a fail-safe option, uses childLayer.table
           var loadAs = nestedParams.loadAs ? nestedParams.loadAs : childLayer.table;
 
+
+          console.log( rnd, "loadAs is:", loadAs );
+
+
           // Create the update object for mongoDb
           var updateObject = { '$set': {} };
           updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childData[ loadAs ];
 
-          console.log("OK UPDATING: " , layer.table, mongoSelector, updateObject );
+          console.log( rnd, "Updating: " , layer.table," with selector: ", mongoSelector, "and update object:", updateObject );
 
           // Update the collection with the new info,
           layer.collection.update( mongoSelector, updateObject, function( err, total ){
@@ -798,6 +742,8 @@ DO SOMETHING LIKE THAT:
       },
       function( err ){
         if( err ) return cb( err );
+
+        console.log( rnd, "EXIT: End of function." );
 
          cb( null );
       }
@@ -821,22 +767,31 @@ DO SOMETHING LIKE THAT:
     if( typeof( params ) !== 'object' || params === null ) params = {};
     if( typeof( params.field ) !== 'string' ) params.field = '_children';
 
-    console.log( '_updateSelfAndParentsChildren called: ', layer.table, record, params );
+    var rnd = Math.floor(Math.random()*100 );
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _updateParentsRecords for ", layer.table, ' => ', record );
+
+    console.log( rnd, "Cycling through: ", Object.keys( layer.parentTablesHash )  );
 
     // Cycle through each parent of the current layer
     async.eachSeries(
       Object.keys( layer.parentTablesHash ),
       function( parentTableKey, cb ){
     
-        console.log("PARENT KEY: ", parentTableKey );
         var parentTableData = layer.parentTablesHash[ parentTableKey ];
-    
+   
+         
+        console.log( rnd, "Working on ", parentTableKey );
+ 
         var parentLayer = parentTableData.layer;
         var nestedParams = parentTableData.nestedParams;
     
         // If this is only to load in autoload, and autoload is off for this join,
         // then quit it here
-        if( ! nestedParams.autoload && params.ifAutoload ) return cb( null );
+        if( ! nestedParams.autoload && params.ifAutoload ){
+          console.log( rnd, "autoload is off and ifAutoLoad is on: aborting this one..." );
+          return cb( null );
+        }
 
         // Work out the select conditions based on the join, to fetch the
         // relevant parent records
@@ -844,33 +799,41 @@ DO SOMETHING LIKE THAT:
         Object.keys( nestedParams.join ).forEach( function( joinKey ){
           andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
         });
-        console.log("TELLING" , parentLayer.table, "TO UPDATE REFS FOR", layer.table, "FOR RECORD MATCHING", andConditionsArray );
+
+        console.log( rnd, "Telling" , parentLayer.table, "to update refs for", layer.table, "for records matchng", andConditionsArray );
     
         // Make up the selectors. The first one is a simpledbschema selector, needed for
         // the layer's select command. The second one is a straight MongoDb selector, needed for
         // the update (made using the Mogodb driver directly)
         var selector = { conditions: { and: andConditionsArray } }; 
         var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
-    
+   
+
+        console.log( rnd, "Running the select...", andConditionsArray );
+
         // Actually run the select to get the parent record.
         // For 1:n relations, there will only be 1 result.
         // For lookup relations, there might be several parent records, all to be updated
         parentLayer.select( selector, function( err, parentRecords, total ){
           if( err ) return cb( err );
    
+          console.log( rnd, "Records fetched:", total, parentRecords );
+
           // Cycle through parentRecords, and get children for each one
           async.eachSeries(
             parentRecords,
             function( parentRecord, cb ){
 
 
-              console.log("PARENT RECORD:", parentRecord );
-              console.log(' self._getChildrenData ', parentLayer.table, parentRecord, layer.table, '' );
+              console.log( rnd, "Working on:", parentRecord );
+
+              console.log( rnd, "Getting children data in parent table ", parentLayer.table );
 
               // Get children data for that particular sub-table of the parent table
               parentLayer._getChildrenData( parentRecord, layer.table, params, function( err, childrenData ){
                 if( err ) return cb( err );
-                console.log("AND THE childrenData data is:", childrenData );
+
+                console.log( rnd, "The childrenData data is:", childrenData );
 
                 // Create the update object for mongoDb
                 // Note that the update statement will depend on the type
@@ -878,17 +841,22 @@ DO SOMETHING LIKE THAT:
                 
                 if( nestedParams.type === 'multiple' ){
                   var updateObject = { '$set': {} };
-                  console.log("UPDATING THIS AS A MULTIPLE RECORD: ", params.field + '.' + layer.table  );
+                  console.log( rnd, "Making the mongo update as a multiple record: ", params.field + '.' + layer.table  );
                   updateObject[ '$set' ] [ params.field + '.' + layer.table ] = childrenData;
                 } else {
-                  console.log("UPDATING THIS AS A LOOKUP: ", params.field + '.' +  loadAs   );
+                  console.log( rnd, "Making the mongo update as a lookup: ", params.field + '.' +  loadAs   );
                   var updateObject = { '$set': {} };
                   updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childrenData[ loadAs ];
                 }
 
+                console.log( rnd, "Running the update..." );
+
                 // Update the collection with the new info
                 parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
                   if( err ) return cb( err );
+
+                  
+                  console.log( rnd, "About to call _updateParentsRecords for the table just updated, to get more levels" );
 
                   // Since the record in parentLayer has changed, the change needs to propagate
                   // the the parentLayer's parents as well. This way, a change in level 3 will
@@ -904,6 +872,8 @@ DO SOMETHING LIKE THAT:
 
             function( err ){
               if( err ) return cb( err );
+
+              console.log( rnd, "Finished working on record" );
               cb( null );
             }
           );
@@ -912,6 +882,7 @@ DO SOMETHING LIKE THAT:
     
       function( err ){
         if( err ) return cb( err );
+        console.log( rnd, "EXIT: End of function." );
         cb( null );
       }
     );
@@ -993,14 +964,18 @@ DO SOMETHING LIKE THAT:
         self._updateParentsRecordsAndSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
           if( err ) return cb( err );
 
-          if( ! options.returnRecord ) return cb( null );
-
-          self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+          self._updateParentsRecordsAndSelfWithLookups( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
             if( err ) return cb( err );
 
-            if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+            if( ! options.returnRecord ) return cb( null );
 
-            cb( null, doc );
+            self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+              if( err ) return cb( err );
+
+              if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+              cb( null, doc );
+            });
           });
         });
       });
