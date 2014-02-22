@@ -422,9 +422,11 @@ var MongoMixin = declare( null, {
       }
 
 
-      self._updateParentsRecordsAndSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+      // Make sure that lookup fields are looked up, and that
+      // parent records containing this record also have their
+      // cache updated
+      self._updateParentsRecordsAndSelfWithLookups( record, function( err ){
         if( err ) return cb( err );
-
 
         // If options.multi is off, then use findAndModify which will accept sort
         if( !options.multi ){
@@ -456,16 +458,48 @@ var MongoMixin = declare( null, {
   },
 
 
-  // This function goes through the child tables, and runs
-  // _getChildrenData for each 
-  completeRecord: function( record, params, cb ){
+  /*
+    This function just takes a record, and calls _completeRecordParams
+    so that both _children and _searchData are filled in.
+  */
+  _completeRecord: function( record, cb ){
 
     var self = this;
 
     var rnd = Math.floor(Math.random()*100 );
 
     console.log( "\n");
-    console.log( rnd, "ENTRY: completeRecord for ",  self.table, ' => ', record );
+    console.log( rnd, "ENTRY: _completeRecord for ",  self.table, ' => ', record );
+
+    self._completeRecordParams( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+      if( err ) return cb( err );
+
+      self._completeRecordParams( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+        if( err ) return cb( err );
+
+        console.log( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
+        cb( null );
+      });
+    });
+  },
+         
+
+  /* ***This function CHANGES record!***
+     This function goes through every child table, and runs
+     _getChildrenData for each one of them, *changing* record
+     so that it includes the child table's information.
+     Basically, if `contacts` is 1:n with `addresses`, it will
+     populate record._children.addresses[] with every corresponding address.
+     
+  */ 
+  _completeRecordParams: function( record, params, cb ){
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _completeRecordParams for ",  self.table, ' => ', record );
 
     // The layer is the object from which the call is made
     var layer = this;
@@ -493,11 +527,9 @@ var MongoMixin = declare( null, {
         var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
 
         console.log( rnd, "Entries will be placed in key:", loadAs );
-
         console.log( rnd, "Getting children data in child table ", childTableKey," for record", record );
 
-        // Runs autoload again on the children, passing the array item._autoLoad[ recordSubTableKey ]
-        // as the currentObject, and re-passing the v object (containing the end result)
+        // Runs _getChildrenData for the found child table
         layer._getChildrenData( record, childTableKey, params, function( err, childrenData ){
           if( err ) return cb( err );
 
@@ -539,6 +571,13 @@ var MongoMixin = declare( null, {
   },
   
 
+  /* This function takes a layer, a record and a child table, and
+     makes sure that record._children.childTable is populated with
+     children's information.
+     Once each sub-record is added to record._children.childTable, the
+     method _completeRecordParams() is called to make sure that the record's
+     own _children are fully filled
+  */
   _getChildrenData: function( record, childTable, params, cb ){
 
     var self = this;
@@ -625,7 +664,7 @@ var MongoMixin = declare( null, {
           console.log( rnd, "Item is now ready to be completed. Requesting completion:", childTableData.layer.table, "->", item );
 
           // It's time to complete the record with children information
-          childTableData.layer.completeRecord( item, params, function( err ){
+          childTableData.layer._completeRecordParams( item, params, function( err ){
             if( err ) cb( err );
 
             console.log( rnd, "Item after completion is:", childTableData.layer.table, "->", require('util').inspect( item, { depth: 8 } ) );
@@ -889,9 +928,44 @@ var MongoMixin = declare( null, {
 
   },
 
-  _updateParentsRecordsAndSelfWithLookups: function( record, params, cb ){
+
+  /*
+    Convenience function that will run _updateParentsRecordsAndSelfWithLookupsParams
+    so that both _children and _searchData are filled in
+  */
+  _updateParentsRecordsAndSelfWithLookups: function( record, cb ){
     var self = this;
 
+    var rnd = Math.floor(Math.random()*100 );
+
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookups for ",  self.table, ' => ', record );
+ 
+    self._updateParentsRecordsAndSelfWithLookupsParams( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+      if( err ) return cb( err );
+
+      self._updateParentsRecordsAndSelfWithLookupsParams( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+        if( err ) return cb( err );
+
+        console.log( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
+        cb( null );
+      });
+    });
+ 
+  },
+
+  /*
+    Convenience function that will run both _updateParentsRecords and updateSelfWithLookups
+    so that 1) A record is complete with its lookups 2) Its parents are updated with new info
+  */
+  _updateParentsRecordsAndSelfWithLookupsParams: function( record, params, cb ){
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+
+    console.log( "\n");
+    console.log( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookupsParams for ",  self.table, ' => ', record );
+ 
     self._updateParentsRecords( record, params, function( err ){
       if( err ) return cb( err );
 
@@ -936,24 +1010,16 @@ var MongoMixin = declare( null, {
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
 
-    /*
-    // Sets the case-insensitive fields
-    Object.keys( self._searchableHash ).forEach( function( fieldName ){
-      if( self._searchableHash[ fieldName ] ){
-        if( typeof( recordToBeWritten[ fieldName ] ) === 'string' ){
-          recordToBeWritten[ '__uc__' + fieldName ] = recordToBeWritten[ fieldName ].toUpperCase();
-        }
-      }
-    });
-    */
-
-      
       // Make searchdata for the record itself, since every search will be based on
-      // _searchData
+      // _searchData. It will copy all fields, regadrless of type, to make searching easier
+      // (although only 'string' types will be uppercased).
       recordToBeWritten._searchData = {};
       for( var k in recordToBeWritten ){
-        if( typeof( recordToBeWritten[ k ] ) === 'string' ){
-          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ].toUpperCase();
+        if( k !== '_searchData' && k !== '_children' && typeof( recordToBeWritten[ k ] ) !== 'object' ){
+          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
+          if( typeof( recordToBeWritten[ k ] ) === 'string' ){
+            recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
+          }
         }
       }
 
@@ -961,21 +1027,20 @@ var MongoMixin = declare( null, {
       self.collection.insert( recordToBeWritten, function( err ){
         if( err )  return cb( err );
 
-        self._updateParentsRecordsAndSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+        // Make sure that lookup fields are looked up, and that
+        // parent records containing this record also have their
+        // cache updated
+        self._updateParentsRecordsAndSelfWithLookups( record, function( err ){
           if( err ) return cb( err );
 
-          self._updateParentsRecordsAndSelfWithLookups( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+          if( ! options.returnRecord ) return cb( null );
+
+          self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
             if( err ) return cb( err );
 
-            if( ! options.returnRecord ) return cb( null );
+            if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
 
-            self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
-              if( err ) return cb( err );
-
-              if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-
-              cb( null, doc );
-            });
+            cb( null, doc );
           });
         });
       });
@@ -1005,17 +1070,24 @@ var MongoMixin = declare( null, {
     // If options.multi is off, then use findAndModify which will accept sort
     if( !options.multi ){
       self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
-        if( err ) {
-          cb( err );
-        } else {
+        if( err ) return cb( err );
 
-          if( doc ){
-            cb( null, 1 );
-          } else {
-            cb( null, 0 );
-          }
+        if( doc ){
+
+          self._updateParentsRecords( doc, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+            if( err ) return cb( err );
+          
+            self._updateParentsRecords( doc, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+              if( err ) return cb( err );
+         
+              cb( null, 1 );
+             });
+          });
+           
+        } else {
+          cb( null, 0 );
         }
-    });
+      });
 
     // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
     } else {
