@@ -20,7 +20,7 @@ var
 ;
 
 var consolelog = function(){
-  //console.log.apply( console, arguments );
+  console.log.apply( console, arguments );
 }
 
 var MongoMixin = declare( null, {
@@ -496,7 +496,7 @@ var MongoMixin = declare( null, {
     var rnd = Math.floor(Math.random()*100 );
 
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: _completeRecordParams for ",  self.table, ' => ', record );
+    consolelog( rnd, "ENTRY: _completeRecordParams for ",  self.table, ' => ', record, ", params:", params );
 
     // The layer is the object from which the call is made
     var layer = this;
@@ -783,7 +783,7 @@ var MongoMixin = declare( null, {
           var updateObject = { '$set': {} };
           updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childData[ loadAs ];
 
-          consolelog( rnd, "Updating: " , layer.table," with selector: ", mongoSelector, "and update object:", updateObject );
+          consolelog( rnd, "Updating 1: " , layer.table," with selector: ", mongoSelector, "and update object:", updateObject );
 
           // Update the collection with the new info,
           layer.collection.update( mongoSelector, updateObject, function( err, total ){
@@ -895,10 +895,15 @@ var MongoMixin = declare( null, {
 
                 consolelog( rnd, "The childrenData data is:", childrenData );
 
-                // Create the update object for mongoDb
-                // Note that the update statement will depend on the type
-                var loadAs = nestedParams.loadAs ? nestedParams.loadAs : layer.table;
-                
+               
+                // Set loadAs to the right value depending on the child type (lookup or multuple)
+                var loadAs;
+                switch( nestedParams.type ){
+                  case 'multiple': loadAs = layer.table; break;
+                  case 'lookup': loadAs = nestedParams.parentField; break;
+                }
+
+ 
                 if( nestedParams.type === 'multiple' ){
                   var updateObject = { '$set': {} };
                   consolelog( rnd, "Making the mongo update as a multiple record: ", params.field + '.' + layer.table  );
@@ -910,6 +915,7 @@ var MongoMixin = declare( null, {
                 }
 
                 consolelog( rnd, "Running the update..." );
+                consolelog( rnd, "Updating 2: " , parentLayer.table," with selector: ", mongoSelector, "and update object:", updateObject );
 
                 // Update the collection with the new info
                 parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
@@ -985,7 +991,7 @@ var MongoMixin = declare( null, {
     var rnd = Math.floor(Math.random()*100 );
 
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookupsParams for ",  self.table, ' => ', record );
+    consolelog( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookupsParams for ",  self.table, ' => ', record, ", params:", params );
  
     self._updateParentsRecords( record, params, function( err ){
       if( err ) return cb( err );
