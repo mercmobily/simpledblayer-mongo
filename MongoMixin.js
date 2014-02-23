@@ -181,7 +181,6 @@ var MongoMixin = declare( null, {
   }, 
 
 
-
   select: function( filters, options, cb ){
 
     var self = this;
@@ -526,7 +525,6 @@ var MongoMixin = declare( null, {
         consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for record", record );
 
         // Runs _getChildrenData for the found child table
-        // FIXME 3 -- FIXED
 
         var subName;
         switch( childTableData.nestedParams.type ){
@@ -605,8 +603,6 @@ var MongoMixin = declare( null, {
     // Paranoid check on params, want it as an object
     if( typeof( params ) !== 'object' || params === null ) params = {};
 
-    // FIXME 1 -- FIXED
-     
     var childTableData = layer.childrenTablesHash[ subName ]; 
 
     // If it's a lookup, it will be v directly. This will cover cases where a new call
@@ -734,7 +730,6 @@ var MongoMixin = declare( null, {
         var nestedParams = childTableData.nestedParams;
 
         // Get children data for that child table
-        // FIXME 4 -- FIXED
         layer._getChildrenData( record, nestedParams.parentField, params, function( err, childData ){
           if( err ) return cb( err );
 
@@ -889,7 +884,6 @@ var MongoMixin = declare( null, {
               consolelog( rnd, "Getting children data in parent table ", parentLayer.table );
 
               // Get children data for that particular sub-table of the parent table
-              // FIXME 2 -- FIXED
               parentLayer._getChildrenData( parentRecord, subName, params, function( err, childrenData ){
                 if( err ) return cb( err );
 
@@ -903,6 +897,7 @@ var MongoMixin = declare( null, {
                   case 'lookup': loadAs = nestedParams.parentField; break;
                 }
 
+                consolelog( rnd, "loadAs is:", loadAs );
  
                 if( nestedParams.type === 'multiple' ){
                   var updateObject = { '$set': {} };
