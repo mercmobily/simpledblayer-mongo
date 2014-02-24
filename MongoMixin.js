@@ -458,7 +458,7 @@ var MongoMixin = declare( null, {
     This function just takes a record, and calls _completeRecordParams
     so that both _children and _searchData are filled in.
   */
-  _completeRecord: function( record, cb ){
+  completeRecord: function( record, cb ){
 
     var self = this;
 
@@ -840,9 +840,8 @@ var MongoMixin = declare( null, {
           case 'multiple': subName = layer.table; break;
           case 'lookup'  : subName = nestedParams.parentField; break;
           default        : return cb( new Error("The options parameter must be a non-null object") ); break;
-         }
-         console.log( rnd, "subName for ", nestedParams.type, "is:", subName );
-
+        }
+        console.log( rnd, "subName for ", nestedParams.type, "is:", subName );
 
         // If this is only to load in autoload, and autoload is off for this join,
         // then quit it here
@@ -880,7 +879,6 @@ var MongoMixin = declare( null, {
           async.eachSeries(
             parentRecords,
             function( parentRecord, cb ){
-
 
               consolelog( rnd, "Working on:", parentRecord );
               consolelog( rnd, "Getting children data in parent table ", parentLayer.table );
