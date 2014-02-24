@@ -568,7 +568,7 @@ var MongoMixin = declare( null, {
         });
       },
       function( err ){
-        if( err ) cb( err );
+        if( err ) return cb( err );
        
 				consolelog( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
  
@@ -673,7 +673,7 @@ var MongoMixin = declare( null, {
 
           // It's time to complete the record with children information
           childTableData.layer._completeRecordParams( item, params, function( err ){
-            if( err ) cb( err );
+            if( err ) return cb( err );
 
             consolelog( rnd, "Item after completion is:", childTableData.layer.table, "->", require('util').inspect( item, { depth: 8 } ) );
 
@@ -841,6 +841,8 @@ var MongoMixin = declare( null, {
           case 'lookup'  : subName = nestedParams.parentField; break;
           default        : return cb( new Error("The options parameter must be a non-null object") ); break;
          }
+         console.log( rnd, "subName for ", nestedParams.type, "is:", subName );
+
 
         // If this is only to load in autoload, and autoload is off for this join,
         // then quit it here
@@ -1047,7 +1049,7 @@ var MongoMixin = declare( null, {
 
       // Actually run the insert
       self.collection.insert( recordToBeWritten, function( err ){
-        if( err )  return cb( err );
+        if( err ) return cb( err );
 
         // Make sure that lookup fields are looked up, and that
         // parent records containing this record also have their
