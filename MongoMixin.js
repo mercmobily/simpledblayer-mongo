@@ -8,6 +8,32 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+
+/*
+
+TODO:
+
+REDO THE LOT!!!
+- getChildren is fine as it is
+- completeRecord is fine as it is
+
+UPDATING A RECORD:
+- Run a search&replace on all father records, searching for the id in the right path, replacing.
+- Will need to replace . with .children.
+
+Only N update calls for table for each update
+
+ADDING A NEW RECORD:
+This is more complicated.
+- Complete it with getRecords
+- Store the completed record
+- Find the parents records one by one, add the NEW RECORD parents by using the path
+- Repeat for the parent's parent
+ 
+
+*/
+
+
 var 
   dummy
 
@@ -179,272 +205,6 @@ var MongoMixin = declare( null, {
 
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
-
-
-  select: function( filters, options, cb ){
-
-    var self = this;
-    var saneRanges;
-
-    // Usual drill
-    if( typeof( cb ) === 'undefined' ){
-      cb = options;
-      options = {}
-    } else if( typeof( options ) !== 'object' || options === null ){
-      return cb( new Error("The options parameter must be a non-null object") );
-    }
-
-    // Make up parameters from the passed filters
-    try {
-      var mongoParameters = this._makeMongoParameters( filters );
-    } catch( e ){
-      return cb( e );
-    }
-
-    // Actually run the query 
-    var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
-    //consolelog("FIND IN SELECT: ",  mongoParameters.querySelector, self._projectionHash );
-
-    // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
-    // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
-    saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
-
-    // Skipping/limiting according to ranges/limits
-    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
-    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
-
-    // Sort the query
-    cursor.sort( mongoParameters.sortHash , function( err ){
-      if( err ){
-        next( err );
-      } else {
-
-        if( options.useCursor ){
-
-          cursor.count( function( err, grandTotal ){
-            if( err ){
-              cb( err );
-            } else {
-
-              cursor.count( { applySkipLimit: true }, function( err, total ){
-                if( err ){
-                  cb( err );
-                } else {
-
-                  cb( null, {
-      
-                    next: function( done ){
-      
-                      cursor.nextObject( function( err, obj) {
-                        if( err ){
-                          done( err );
-                        } else {
-      
-                          // If options.delete is on, then remove a field straight after fetching it
-                          if( options.delete && obj !== null ){
-                            self.collection.remove( { _id: obj._id }, function( err, howMany ){
-                              if( err ){
-                                done( err );
-                              } else {
-
-                                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
-
-                                self.schema.validate( obj, function( err, obj, errors ){
-
-                                  // If there is an error, end of story
-                                  // If validation fails, call callback with self.SchemaError
-                                  if( err ) return cb( err );
-                                  //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-                                  done( null, obj );
-                                });
-                              }
-                            });
-                          } else {
-
-                            if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
-
-                            if( obj === null ) return done( null, obj );
-
-                            self.schema.validate( obj, function( err, obj, errors ){
-
-                              // If there is an error, end of story
-                              // If validation fails, call callback with self.SchemaError
-                              if( err ) return cb( err );
-                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-                              done( null, obj );
-                            });
-                              
-                          }
-                        }
-                      });
-                    },
-      
-                    rewind: function( done ){
-                      if( options.delete ){
-                        done( new Error("Cannot rewind a cursor with `delete` option on") );
-                      } else {
-                        cursor.rewind();
-                        done( null );
-                      }
-                    },
-                    close: function( done ){
-                      cursor.close( done );
-                    }
-                  }, total, grandTotal );
-
-                }
-              });
-
-            }
-          });
-
-        } else {
-
-          cursor.toArray( function( err, queryDocs ){
-            if( err ){
-             cb( err );
-            } else {
-
-              cursor.count( function( err, grandTotal ){
-                if( err ){
-                  cb( err );
-                } else {
-
-                  cursor.count( { applySkipLimit: true }, function( err, total ){
-                    if( err ){
-                      cb( err );
-                    } else {
-
-                      // Cycle to work out the toDelete array _and_ get rid of the _id_
-                      // from the resultset
-                      var toDelete = [];
-                      queryDocs.forEach( function( doc ){
-                        if( options.delete ) toDelete.push( doc._id );
-                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-                      });
-
-                      // If it was a delete, delete each record
-                      // Note that there is no check whether the delete worked or not
-                      if( options.delete ){
-                        toDelete.forEach( function( _id ){
-                          self.collection.remove( { _id: _id }, function( err ){ } );
-                        });
-                      }
-
-                      var changeFunctions = [];
-                      // Validate each doc, running a validate function for each one of them in parallel
-                      queryDocs.forEach( function( doc, index ){
-
-                        changeFunctions.push( function( callback ){
-                          self.schema.validate( doc, function( err, validatedDoc, errors ){
-                            if( err ){
-                              callback( err );
-                            } else {
-
-                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-                              queryDocs[ index ] = validatedDoc;
-                               
-                              callback( null );
-                            }
-                          });
-                        });
-                      }); 
-                      async.parallel( changeFunctions, function( err ){
-                        if( err ) return cb( err );
-
-                        // That's all!
-                        cb( null, queryDocs, total, grandTotal );
-                      });
-
-                    };
-                  });
-
-                };
-              });
-
-            };
-          })
-
-        }
-      }
-    });
-       
-  },
-
-
-  update: function( filters, record, options, cb ){
-
-    var self = this;
-    var unsetObject = {};
-    var recordToBeWritten = {};
-
-    // Validate the record against the schema
-    self.schema.validate( record, function( err, record, errors ){
-
-      // If there is an error, end of story
-      // If validation fails, call callback with self.SchemaError
-      if( err ) return cb( err );
-      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-      // Usual drill
-      if( typeof( cb ) === 'undefined' ){
-        cb = options;
-        options = {}
-      } else if( typeof( options ) !== 'object' || options === null ){
-        return cb( new Error("The options parameter must be a non-null object") );
-      }
-
-      // Copy record over, only for existing fields
-      for( var k in record ){
-        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
-      }
-
-      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
-      // so that partial PUTs will "overwrite" whole objects rather than
-      // just overwriting fields that are _actually_ present in `body`
-      if( options.deleteUnsetFields ){
-        Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( recordToBeWritten[ i ] ) === 'undefined' && i !== '_id' ) unsetObject[ i ] = 1;
-        });
-      }
-
-      // Make up parameters from the passed filters
-      try {
-        var mongoParameters = self._makeMongoParameters( filters );
-      } catch( e ){
-        return cb( e );
-      }
-
-
-      // Make sure that lookup fields are looked up, and that
-      // parent records containing this record also have their
-      // cache updated
-      self._updateParentsRecordsAndSelfWithLookups( record, function( err ){
-        if( err ) return cb( err );
-
-        // If options.multi is off, then use findAndModify which will accept sort
-        if( !options.multi ){
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
-            if( err ) return cb( err );
-
-            if( doc ){
-              cb( null, 1 );
-            } else {
-              cb( null, 0 );
-            }
-          });
-
-        // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
-        } else {
-
-          // Run the query
-          self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
-        }
-      });
-    });
-  },
 
 
   _toUpperCaseRecord: function( record ){
@@ -851,6 +611,7 @@ var MongoMixin = declare( null, {
     );
   },
 
+ 
   /*
    This function will update each parent record so that it contains
    up-to-date information about the child.
@@ -931,22 +692,31 @@ var MongoMixin = declare( null, {
    
         consolelog( rnd, "Running the select...", andConditionsArray );
 
-        // Actually run the select to get the parent record.
-        // For 1:n relations, there will only be 1 result.
-        // For lookup relations, there might be several parent records, all to be updated
-        parentLayer.select( selector, function( err, parentRecords, total ){
-          if( err ) return cb( err );
-   
-          consolelog( rnd, "Records fetched:", total, parentRecords );
 
-          // Cycle through parentRecords, and get children for each one
-          async.eachSeries(
-            parentRecords,
-            function( parentRecord, cb ){
+        // SPLIT HERE
+
+        switch( nestedParams.type ){
+
+          case 'multiple':
+
+            // Actually run the select to get the parent record.
+            // For 1:n relations, there will only be 1 result.
+            parentLayer.select( selector, function( err, parentRecords, total ){
+              if( err ) return cb( err );
+
+              // No children: end of story
+              if( total == 0 ) return cb( null );
+ 
+              consolelog( rnd, "Records fetched:", total, parentRecords );
+
+              var parentRecord = parentRecords[ 0 ];
+
+              // Cycle through parentRecords, and get children for each one
 
               consolelog( rnd, "Working on:", parentRecord );
               consolelog( rnd, "Getting children data in parent table ", parentLayer.table );
 
+              // CHECK: _children
               // Check if the key needs to be worked on.
               // If not, it won't just "skip": it will also call itself with its parent.
               if( !parentLayer.autoLoad[ parentLayer.table + '.' + subName ] ){
@@ -969,25 +739,14 @@ var MongoMixin = declare( null, {
 
                 consolelog( rnd, "The childrenData data is:", childrenData );
 
-               
                 // Set loadAs to the right value depending on the child type (lookup or multuple)
-                var loadAs;
-                switch( nestedParams.type ){
-                  case 'multiple': loadAs = layer.table; break;
-                  case 'lookup': loadAs = nestedParams.parentField; break;
-                }
+                var loadAs = layer.table;
 
                 consolelog( rnd, "loadAs is:", loadAs );
  
-                if( nestedParams.type === 'multiple' ){
-                  var updateObject = { '$set': {} };
-                  consolelog( rnd, "Making the mongo update as a multiple record: ", params.field + '.' + layer.table  );
-                  updateObject[ '$set' ] [ params.field + '.' + layer.table ] = childrenData;
-                } else {
-                  consolelog( rnd, "Making the mongo update as a lookup: ", params.field + '.' +  loadAs   );
-                  var updateObject = { '$set': {} };
-                  updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childrenData[ loadAs ];
-                }
+                var updateObject = { '$set': {} };
+                consolelog( rnd, "Making the mongo update as a multiple record: ", params.field + '.' + layer.table  );
+                updateObject[ '$set' ] [ params.field + '.' + layer.table ] = childrenData;
 
                 consolelog( rnd, "Running the update..." );
                 consolelog( rnd, "Updating 2: " , parentLayer.table," with selector: ", mongoSelector, "and update object:", updateObject );
@@ -1010,6 +769,107 @@ var MongoMixin = declare( null, {
 
                 });
               });
+            });
+
+          break;
+
+          case 'lookup':
+
+        // Actually run the select to get the parent record.
+        // For 1:n relations, there will only be 1 result.
+        // For lookup relations, there might be several parent records, all to be updated
+        parentLayer.select( selector, function( err, parentRecords, total ){
+          if( err ) return cb( err );
+   
+          consolelog( rnd, "Records fetched:", total, parentRecords );
+
+          // No children: end of story
+          if( total == 0 ) return cb( null );
+
+          // Since the update will actually work on _every_ parent with the lookup
+          // as a child, it will only be run once
+          var firstRun = true;
+ 
+          // Cycle through parentRecords, and get children for each one
+          async.eachSeries(
+            parentRecords,
+            function( parentRecord, cb ){
+
+              consolelog( rnd, "Working on:", parentRecord );
+              consolelog( rnd, "Getting children data in parent table ", parentLayer.table );
+
+              // CHECK: _children
+              // Check if the key needs to be worked on.
+              // If not, it won't just "skip": it will also call itself with its parent.
+              if( !parentLayer.autoLoad[ parentLayer.table + '.' + subName ] ){
+                consolelog( rnd, "Child key", parentLayer.table + '.' + subName, "is not a key in the master table's ", parentLayer.table, "list, skipping" );
+                consolelog( rnd, "Paths in table: ", Object.keys( self.autoLoad ) );
+                consolelog( rnd, "Calling more parents...", Object.keys( self.autoLoad ) );
+                
+                parentLayer._updateParentsRecords( parentRecord, params, d, function( err ){
+                  if( err ) return cb( err );
+
+                  cb( null );
+                });
+                return;
+              }
+
+              // Only in the very first run, get the children data and update it.
+              // Since the update actually updates _all_ parents in one go, we only
+              // need to run this once.
+              // Note that the result of _getChildrenData won't change
+              
+              if( firstRun ){
+                firstRun = false;
+
+                // Get children data for that particular sub-table of the parent table
+                // ROOT to _getChildrenData
+                parentLayer._getChildrenData( parentRecord, subName, params, parentLayer.table + '.' + subName, parentLayer, function( err, childrenData ){
+                  if( err ) return cb( err );
+
+                  consolelog( rnd, "The childrenData data is:", childrenData );
+               
+                  // Set loadAs to the right value depending on the child type (lookup or multuple)
+                  var loadAs = nestedParams.parentField;
+
+                  consolelog( rnd, "loadAs is:", loadAs );
+ 
+                  consolelog( rnd, "Making the mongo update as a lookup: ", params.field + '.' +  loadAs   );
+                  var updateObject = { '$set': {} };
+                  updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childrenData[ loadAs ];
+
+                  consolelog( rnd, "Running the update..." );
+                  consolelog( rnd, "Updating 2: " , parentLayer.table," with selector: ", mongoSelector, "and update object:", updateObject );
+
+                  // Update the collection with the new info
+                  parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
+                    if( err ) return cb( err );
+                  
+                    consolelog( rnd, "About to call _updateParentsRecords for the table just updated, to get more levels" );
+
+                    // Since the record in parentLayer has changed, the change needs to propagate
+                    // the the parentLayer's parents as well. This way, a change in level 3 will
+                    // propagate to records in level 2, and then for each changed record in level 2
+                    // the change will propagate to level 1.
+                    parentLayer._updateParentsRecords( parentRecord, params, d, function( err ){
+                      if( err ) return cb( err );
+                      cb( null );
+                    });
+
+                  });
+                });
+              } else {
+
+                // This is NOT the first run. In this case, just straight to the "call the parents" part
+                parentLayer._updateParentsRecords( parentRecord, params, d, function( err ){
+                  if( err ) return cb( err );
+                  cb( null );
+                });
+              
+ 
+              }
+
+
             },
 
             function( err ){
@@ -1020,6 +880,15 @@ var MongoMixin = declare( null, {
             }
           );
         });
+
+
+          break;
+
+          default:
+            cb( new Error( "Parameter 'type' needs to be 'lookup' or 'multiple' " ) );
+          break;
+        }
+          
       },
     
       function( err ){
@@ -1032,53 +901,350 @@ var MongoMixin = declare( null, {
   },
 
 
-  /*
-    Convenience function that will run _updateParentsRecordsAndSelfWithLookupsParams
-    so that both _children and _searchData are filled in
-  */
-  _updateParentsRecordsAndSelfWithLookups: function( record, cb ){
+ 
+  _updateCacheDelete: function( record, cb ){
+
     var self = this;
 
     var rnd = Math.floor(Math.random()*100 );
-
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookups for ",  self.table, ' => ', record );
- 
-    self._updateParentsRecordsAndSelfWithLookupsParams( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+    consolelog( rnd, "ENTRY: _updateCacheDelete ",  self.table, ' => ', record );
+
+    self._updateParentsRecords( record, { upperCase: false, field: '_children', ifAutoload: true }, {}, function( err ){
       if( err ) return cb( err );
 
-      //self._updateParentsRecordsAndSelfWithLookupsParams( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
-      //  if( err ) return cb( err );
-
-        consolelog( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
-        cb( null );
-      //});
-    });
- 
-  },
-
-  /*
-    Convenience function that will run both _updateParentsRecords and updateSelfWithLookups
-    so that 1) A record is complete with its lookups 2) Its parents are updated with new info
-  */
-  _updateParentsRecordsAndSelfWithLookupsParams: function( record, params, cb ){
-    var self = this;
-
-    var rnd = Math.floor(Math.random()*100 );
-
-    consolelog( "\n");
-    consolelog( rnd, "ENTRY: _updateParentsRecordsAndSelfWithLookupsParams for ",  self.table, ' => ', record, ", params:", params );
- 
-    self._updateParentsRecords( record, params, {}, function( err ){
-      if( err ) return cb( err );
-
-      self._updateSelfWithLookups( record, params, function( err ){
+      self._updateParentsRecords( record, { upperCase: true, field: '_searchData', ifAutoload: false }, {}, function( err ){
         if( err ) return cb( err );
+          
+        consolelog( rnd, "EXIT: End of function." );
 
         cb( null );
       });
     });
   },
+
+
+
+  _updateCacheInsert: function( record, cb ){
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: _updateCacheInsert ",  self.table, ' => ', record );
+
+    self._updateParentsRecords( record, { upperCase: false, field: '_children', ifAutoload: true }, {}, function( err ){
+      if( err ) return cb( err );
+
+      self._updateSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+        if( err ) return cb( err );
+
+      //  self._updateParentsRecords( record, { upperCase: true, field: '_searchData', ifAutoload: false }, {}, function( err ){
+      //    if( err ) return cb( err );
+
+      //    self._updateSelfWithLookups( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+      //      if( err ) return cb( err );
+      
+
+        consolelog( rnd, "EXIT: End of function." );
+        cb( null );
+
+      //    });
+      //  });
+
+      });
+    });
+
+  },
+
+  // Alias to updateCacheInsert
+  _updateCacheUpdate: function( record, cb ){
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: _updateCacheUpdate ",  self.table, ' => ', record );
+
+    self._updateCacheInsert( record, function( err ){
+      if( err ) return cb( err );
+
+      consolelog( rnd, "EXIT: End of function." );
+      cb( null );
+
+    });
+  },
+
+
+
+
+  select: function( filters, options, cb ){
+
+    var self = this;
+    var saneRanges;
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // Make up parameters from the passed filters
+    try {
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
+
+    // Actually run the query 
+    var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
+    //consolelog("FIND IN SELECT: ",  mongoParameters.querySelector, self._projectionHash );
+
+    // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
+    // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
+    saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
+
+    // Skipping/limiting according to ranges/limits
+    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
+    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
+
+    // Sort the query
+    cursor.sort( mongoParameters.sortHash , function( err ){
+      if( err ){
+        next( err );
+      } else {
+
+        if( options.useCursor ){
+
+          cursor.count( function( err, grandTotal ){
+            if( err ){
+              cb( err );
+            } else {
+
+              cursor.count( { applySkipLimit: true }, function( err, total ){
+                if( err ){
+                  cb( err );
+                } else {
+
+                  cb( null, {
+      
+                    next: function( done ){
+      
+                      cursor.nextObject( function( err, obj) {
+                        if( err ){
+                          done( err );
+                        } else {
+      
+                          // If options.delete is on, then remove a field straight after fetching it
+                          if( options.delete && obj !== null ){
+                            self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                              if( err ){
+                                done( err );
+                              } else {
+
+                                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                                self.schema.validate( obj, function( err, obj, errors ){
+
+                                  // If there is an error, end of story
+                                  // If validation fails, call callback with self.SchemaError
+                                  if( err ) return cb( err );
+                                  //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                                  done( null, obj );
+                                });
+                              }
+                            });
+                          } else {
+
+                            if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                            if( obj === null ) return done( null, obj );
+
+                            self.schema.validate( obj, function( err, obj, errors ){
+
+                              // If there is an error, end of story
+                              // If validation fails, call callback with self.SchemaError
+                              if( err ) return cb( err );
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                              done( null, obj );
+                            });
+                              
+                          }
+                        }
+                      });
+                    },
+      
+                    rewind: function( done ){
+                      if( options.delete ){
+                        done( new Error("Cannot rewind a cursor with `delete` option on") );
+                      } else {
+                        cursor.rewind();
+                        done( null );
+                      }
+                    },
+                    close: function( done ){
+                      cursor.close( done );
+                    }
+                  }, total, grandTotal );
+
+                }
+              });
+
+            }
+          });
+
+        } else {
+
+          cursor.toArray( function( err, queryDocs ){
+            if( err ){
+             cb( err );
+            } else {
+
+              cursor.count( function( err, grandTotal ){
+                if( err ){
+                  cb( err );
+                } else {
+
+                  cursor.count( { applySkipLimit: true }, function( err, total ){
+                    if( err ){
+                      cb( err );
+                    } else {
+
+                      // Cycle to work out the toDelete array _and_ get rid of the _id_
+                      // from the resultset
+                      var toDelete = [];
+                      queryDocs.forEach( function( doc ){
+                        if( options.delete ) toDelete.push( doc._id );
+                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                      });
+
+                      // If it was a delete, delete each record
+                      // Note that there is no check whether the delete worked or not
+                      if( options.delete ){
+                        toDelete.forEach( function( _id ){
+                          self.collection.remove( { _id: _id }, function( err ){ } );
+                        });
+                      }
+
+                      var changeFunctions = [];
+                      // Validate each doc, running a validate function for each one of them in parallel
+                      queryDocs.forEach( function( doc, index ){
+
+                        changeFunctions.push( function( callback ){
+                          self.schema.validate( doc, function( err, validatedDoc, errors ){
+                            if( err ){
+                              callback( err );
+                            } else {
+
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+                              queryDocs[ index ] = validatedDoc;
+                               
+                              callback( null );
+                            }
+                          });
+                        });
+                      }); 
+                      async.parallel( changeFunctions, function( err ){
+                        if( err ) return cb( err );
+
+                        // That's all!
+                        cb( null, queryDocs, total, grandTotal );
+                      });
+
+                    };
+                  });
+
+                };
+              });
+
+            };
+          })
+
+        }
+      }
+    });
+       
+  },
+
+
+  update: function( filters, record, options, cb ){
+
+    var self = this;
+    var unsetObject = {};
+    var recordToBeWritten = {};
+
+    // Validate the record against the schema
+    self.schema.validate( record, function( err, record, errors ){
+
+      // If there is an error, end of story
+      // If validation fails, call callback with self.SchemaError
+      if( err ) return cb( err );
+      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+      // Usual drill
+      if( typeof( cb ) === 'undefined' ){
+        cb = options;
+        options = {}
+      } else if( typeof( options ) !== 'object' || options === null ){
+        return cb( new Error("The options parameter must be a non-null object") );
+      }
+
+      // Copy record over, only for existing fields
+      for( var k in record ){
+        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ) recordToBeWritten[ k ] = record[ k ];
+      }
+
+      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
+      // so that partial PUTs will "overwrite" whole objects rather than
+      // just overwriting fields that are _actually_ present in `body`
+      if( options.deleteUnsetFields ){
+        Object.keys( self._fieldsHash ).forEach( function( i ){
+           if( typeof( recordToBeWritten[ i ] ) === 'undefined' && i !== '_id' ) unsetObject[ i ] = 1;
+        });
+      }
+
+      // Make up parameters from the passed filters
+      try {
+        var mongoParameters = self._makeMongoParameters( filters );
+      } catch( e ){
+        return cb( e );
+      }
+
+
+      // Make sure that lookup fields are looked up, and that
+      // parent records containing this record also have their
+      // cache updated
+      self._updateCacheUpdate( record, function( err ){
+        if( err ) return cb( err );
+
+        // If options.multi is off, then use findAndModify which will accept sort
+        if( !options.multi ){
+          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
+            if( err ) return cb( err );
+
+            if( doc ){
+              cb( null, 1 );
+            } else {
+              cb( null, 0 );
+            }
+          });
+
+        // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
+        } else {
+
+          // Run the query
+          self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
+        }
+      });
+    });
+  },
+
+
+
 
 
   insert: function( record, options, cb ){
@@ -1112,11 +1278,11 @@ var MongoMixin = declare( null, {
       // Every record in Mongo MUST have an _id field
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
-
       // Make searchdata for the record itself, since every search will be based on
       // _searchData. It will copy all fields, regadrless of type, to make searching easier
       // (although only 'string' types will be uppercased).
-      recordToBeWritten._searchData = {};
+      // TODO: re-establish this so that it writes the right fields, the ones without a "." in them
+      /*recordToBeWritten._searchData = {};
       for( var k in recordToBeWritten ){
         if( k !== '_searchData' && k !== '_children' && typeof( recordToBeWritten[ k ] ) !== 'object' ){
           recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
@@ -1124,7 +1290,7 @@ var MongoMixin = declare( null, {
             recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
           }
         }
-      }
+      }*/
 
       // Actually run the insert
       self.collection.insert( recordToBeWritten, function( err ){
@@ -1133,7 +1299,7 @@ var MongoMixin = declare( null, {
         // Make sure that lookup fields are looked up, and that
         // parent records containing this record also have their
         // cache updated
-        self._updateParentsRecordsAndSelfWithLookups( record, function( err ){
+        self._updateCacheInsert( record, function( err ){
           if( err ) return cb( err );
 
           if( ! options.returnRecord ) return cb( null );
@@ -1177,16 +1343,11 @@ var MongoMixin = declare( null, {
 
         if( doc ){
 
-          self._updateParentsRecords( doc, { upperCase: false, field: '_children', ifAutoload: true }, {}, function( err ){
+          self._updateCacheDelete( doc , function( err ){
             if( err ) return cb( err );
-          
-            //self._updateParentsRecords( doc, { upperCase: true, field: '_searchData', ifAutoload: false }, {}, function( err ){
-            //  if( err ) return cb( err );
-         
-              cb( null, 1 );
-            // });
+            cb( null, 1 );
           });
-           
+
         } else {
           cb( null, 0 );
         }
@@ -1277,6 +1438,29 @@ var MongoMixin = declare( null, {
 
     this.collection.dropAllIndexes( done );
   },
+
+
+
+
+
+
+  // **** DELETED FUNCTIONS ***
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 });
 
