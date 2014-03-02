@@ -27,7 +27,6 @@ var consolelog = function(){
 var MongoMixin = declare( null, {
 
   _projectionHash: {},
-  _searchableHash: {},
   _fieldsHash: {},
 
   constructor: function( table, options ){
@@ -37,18 +36,14 @@ var MongoMixin = declare( null, {
     // Make up the _***Hash variables, which are used widely
     // within the module
     self._projectionHash = {};
-    self._searchableHash = {};
     self._fieldsHash = {};
 
     //consolelog('\n\nINITIATING ', self );
 
     Object.keys( self.schema.structure ).forEach( function( field ) {
-      //consolelog("FIELD: ", field );
       var entry = self.schema.structure[ field ];
-      //consolelog("ENTRY: ", entry );
       self._fieldsHash[ field ] = true;
 			if( ! entry.skipProjection ) self._projectionHash[ field ] = true;
-      if( entry.searchable ) self._searchableHash[ field ] = true;
     });
 
     // Create self.collection, used by every single query
@@ -88,7 +83,9 @@ var MongoMixin = declare( null, {
           //consolelog("SEARCHABLE HASH: ", self._searchableHash, field );
           if( !self._searchableHash[ field ] ){
             // FIXME: reinstate this, after automatically adding the necessary indexes
-            //throw( new Error("Field " + field + " is not searchable" ) );
+            console.log("SEARCHABLE HASH: ", self._searchableHash );
+
+            throw( new Error("Field " + field + " is not searchable" ) );
           }
 
           var item = { };
@@ -182,7 +179,6 @@ var MongoMixin = declare( null, {
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
 
-
   _toUpperCaseRecord: function( record ){
     for( var k in record ){
       if( typeof( record[ k ] ) === 'string' ) record[ k ] = record[ k ].toUpperCase();
@@ -190,149 +186,16 @@ var MongoMixin = declare( null, {
   },
 
 
-  /*
-    This function just takes a record, and calls _completeRecord
-    so that both _children and _searchData are filled in.
-  */
-  completeRecord: function( record, cb ){
-
-    var self = this;
-
-    var rnd = Math.floor(Math.random()*100 );
-
-    consolelog( "\n");
-    consolelog( rnd, "ENTRY: _completeRecord for ",  self.table, ' => ', record );
-
-    // ROOT to _completeRecord
-    self._completeRecord( record, { upperCase: false, field: '_children', ifAutoload: true }, self.table, self, function( err ){
-      if( err ) return cb( err );
-
-      //self._completeRecord( record, { upperCase: true, field: '_searchData', ifAutoload: false }, self.table, function( err ){
-        //if( err ) return cb( err );
-
-        consolelog( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
-        cb( null );
-      //});
-    });
-  },
-         
-
-  /* ***This function CHANGES record!***
-     This function goes through every child table, and runs
-     _getChildrenData for each one of them, *changing* record
-     so that it includes the child table's information.
-     Basically, if `contacts` is 1:n with `addresses`, it will
-     populate record._children.addresses[] with every corresponding address.
-     
-  */ 
-  _completeRecord: function( record, params, cb ){
-
-    var self = this;
-
-    var rnd = Math.floor(Math.random()*100 );
-
-    consolelog( "\n");
-    consolelog( rnd, "ENTRY: _completeRecord for ",  self.table, ' => ', record, ", params:", params );
-
-    // The layer is the object from which the call is made
-    var layer = this;
-
-    // Path needs to be an object
-    if( typeof( path ) !== 'string' ){
-      return cb( new Error( "Parameter path of _getChildrenData must be a string") );
-    }
-
-    consolelog( rnd, "Cycling through: ", layer.childrenTablesHash );
-
-    // This should go in the right spot, right here. And not IN the cycle zapping
-    // the previous values every time. Oh boy.
-    record[ params.field ] = {};
-
-    async.eachSeries(
-      Object.keys( layer.childrenTablesHash ),
-      function( childTableKey, cb ){
-    
-        var childTableData = layer.childrenTablesHash[ childTableKey ];
- 
-        consolelog( rnd, "Working on ", childTableData.layer.table );
-
-        // Since there can be several fields pointing to the same
-        // lookup table (e.g. `personId`, `nextOfKinId` in the same table),
-        // nestedParams should contain `loadAs` which is the spot where the information
-        // will be placed. If not, it falls back to the layer's name.
-        // Note that it cannot fallback to the record's name, since the join
-        // can have several elements and would be ambiguous.
-        //var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
-
-        consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for record", record );
-
-        // Runs _getChildrenData for the found child table
-
-        var field;
-        switch( childTableData.nestedParams.type ){
-          case 'multiple': field = childTableData.layer.table; break;
-          case 'lookup'  : field = childTableData.nestedParams.parentField; break;
-          default        : return cb( new Error("The options parameter must be a non-null object") ); break;
-        }
-     
-        // Check if the key needs to be worked on
-        if( !childTableData.nestedParams.autoLoad ){
-          consolelog( rnd, "Child key doesn't have autoLoad turned on, skipping..." );
-          return cb( null );
-        }
-
-        layer._getChildrenData( record, field, params, function( err, childrenData ){
-          if( err ) return cb( err );
-          
-          consolelog( rnd, "Extra information will be stored in records[", params.field , " ] where record is", record );
-
-
-          switch( childTableData.nestedParams.type ){
-            case 'lookup':
-              consolelog( rnd, "Its a lookup. Doing: record[ params.field ][ loadAs ] = childrenData[ loadAs ] ");
-              consolelog( rnd, "Note that childrenData is:", childrenData );
-
-              var loadAs = childTableData.nestedParams.parentField;
-              consolelog( rnd, "Entries will be placed in key:", loadAs );
-              if( childrenData[ loadAs ] ) record[ params.field ][ loadAs ] = childrenData; 
-            break;
-
-            case 'multiple':
-              consolelog( rnd, "Its a multiple. Doing: record[ params.field ][ loadAs ] = childrenData");
-
-              var loadAs = childTableData.layer.table;
-              consolelog( rnd, "Entries will be placed in key:", loadAs );
-              if( childrenData.length ) record[ params.field ][ loadAs ] = childrenData; 
-            break;
-
-            default:
-              cb( new Error( "Parameter 'type' needs to be 'lookup' or 'multiple' " ) );
-            break;
-          }
-
-          consolelog( rnd, "Record, which should be growing, is now: ", record );
-
-          cb( null );
-        });
-      },
-      function( err ){
-        if( err ) return cb( err );
-       
-				consolelog( rnd, "EXIT: record is:", require('util').inspect( record, { depth: 8 } ) );
- 
-        cb( null );
-      }
-    );
-
-  },
-  
-
   /* This function takes a layer, a record and a child table, and
      makes sure that record._children.field is populated with
      children's information.
      Once each sub-record is added to record._children.childTable, the
      method _completeRecord() is called to make sure that the record's
      own _children are fully filled
+
+     NOTE: In mongoDbLayer, this function is only really used for lookups
+     by _updateSelfWithLookups(), as 1:n children are actually added/updated/deleted
+     by spefific functions that will affect the parent's correct subarray
   */
   _getChildrenData: function( record, field, params, cb ){
 
@@ -353,7 +216,6 @@ var MongoMixin = declare( null, {
     if( typeof( params ) !== 'object' || params === null ) params = {};
 
     var childTableData = layer.childrenTablesHash[ field ]; 
-
 
     // If it's a lookup, it will be v directly. This will cover cases where a new call
     // is made straight on the lookup
@@ -405,8 +267,8 @@ var MongoMixin = declare( null, {
           consolelog( rnd, "Considering item:", item );
    
           // Make the record uppercase if so required
-          if( params.upperCase ){
-            consolelog( rnd, "UpperCasing the item as requested by params");
+          if( params.field === '_searchData' ){
+            consolelog( rnd, "UpperCasing the item as it's a _searchData");
             self._toUpperCaseRecord( item );
           }
 
@@ -537,11 +399,14 @@ var MongoMixin = declare( null, {
  
   /*
    This function will update each parent record so that it contains
-   up-to-date information about the child.
+   up-to-date information about its children.
    If you update a child record, any parent containing a reference to it
    will need to be updated.
-   Note that the function will run a different `update` operation depending
-   on whether the parent is a 1:n relationship, or it's a lookup.
+   This is built to be _fast_: there is only one extra update for each
+   parent table. When #831 is fixed in MongoDb, it will be possible to have
+   nested tables and populate children after the first level
+   Until then, there is no point in having recursion here as MongoDb cannot update
+   inner arrays deeper than 1 level atomically (sigh)
   */
   _updateParentsRecords: function( record, params, cb ){
 
@@ -556,7 +421,14 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateParentsRecords for ", layer.table, ' => ', record );
 
+
+    // First of all, if params.field is _searchData, the record needs to be upperCased
+    if( params.field === '_searchData' ){
+      self._toUpperCaseRecord( record );
+    }
+
     consolelog( rnd, "Cycling through: ", layer.parentTablesArray );
+
 
     // Cycle through each parent of the current layer
     async.eachSeries(
@@ -567,6 +439,19 @@ var MongoMixin = declare( null, {
  
         var parentLayer = parentTableData.layer;
         var nestedParams = parentTableData.nestedParams;
+
+        
+        // If it's not meant to be autoLoaded, skip it
+        if( ! nestedParams.autoLoad && params.field === '_children' ){
+          consolelog( rnd, "Child table doesn't have autoLoad and _children was to be populated, skipping..." );
+          return cb( null );
+        }
+
+        // If it's not meant to be searchable, skip it
+        if( ! nestedParams.searchable && params.field === '_searchData' ){
+          consolelog( rnd, "Child table doesn't have searchable and _searchData was to be populated, skipping..." );
+          return cb( null );
+        }
 
         // Figure out what to pass as the second parameter of _getChildrenData: 
         // - For multiple, it will just be the table's name
@@ -579,11 +464,15 @@ var MongoMixin = declare( null, {
         }
         console.log( rnd, "field for ", nestedParams.type, "is:", field );
 
-        /* FOUR CASES:
+        /* SIX CASES:
           * CASE #1 Insert into a multiple one   -> Push into _children.addresses[] where the (reversed) join is satisfied
           * CASE #2 Insert into lookup -> Do nothing
+
           * CASE #3 Update into a multiple one   -> Update to new info where _children.addresses.id is the same as record.id
           * CASE #4 Update into lookup -> Update the new info where _children.country.id is the same as record.id
+
+          * CASE #5 Delete from multiple one   ->
+          * CASE #6 Delete from lookup -> 
         */
 
         // CASE #1
@@ -599,7 +488,9 @@ var MongoMixin = declare( null, {
           });
 
           var updateObject = { '$push': {} };
-          updateObject[ '$push' ] [ params.field + '.' + field ] = record;
+          
+          updateObject[ '$push' ] [ params.field + '.' + field ] = { '$each': [ record ], '$slice': -1000 };
+          if( nestedParams.sort ) updateObject[ '$push' ] [ params.field + '.' + field ][ '$sort' ] = sort;
 
           var selector = { conditions: { and: andConditionsArray } }; 
           var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
@@ -609,11 +500,11 @@ var MongoMixin = declare( null, {
           consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
 
             consolelog( rnd, "Updated:", total, "records" );
-            // End of story
-            cb( null );
 
+            cb( null );
            
           });
 
@@ -631,7 +522,7 @@ var MongoMixin = declare( null, {
           andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
 
           var updateObject = { '$set': {} };
-          updateObject[ '$set' ] [ params.field + '.' + field + '$' ] = record;
+          updateObject[ '$set' ] [ params.field + '.' + field + '.$' ] = record;
 
           var selector = { conditions: { and: andConditionsArray } }; 
           var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
@@ -641,18 +532,18 @@ var MongoMixin = declare( null, {
           consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
 
             consolelog( rnd, "Updated:", total, "records" );
+
             // End of story
             cb( null );
-
            
           });
 
         // CASE #4
-        // #831:
+        // #831: andConditionsArray needs to be prefixed with the father's table, the update object too
 
-        // TODO: TEST THIS, NEVER TESTED
         } else if( params.op === 'update' && nestedParams.type === 'lookup' ){
 
           consolelog( rnd, "CASE #4 (update, lookup)" );
@@ -671,71 +562,75 @@ var MongoMixin = declare( null, {
           consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
 
             consolelog( rnd, "Updated:", total, "records" );
             // End of story
             cb( null );
-
-           
           });
 
+        // CASE #5
+        // #831: 
+        } else if( params.op === 'delete' && nestedParams.type === 'multiple' ){
 
+          consolelog( rnd, "CASE #5 (delete, multiple)" );
 
+          var andConditionsArray = [];
+          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
 
+          var updateObject = { '$pull': {} };
+          var pullData = {};
+          pullData[ parentLayer.idProperty  ] =  record[ parentLayer.idProperty ] ;
+          updateObject[ '$pull' ] [ params.field + '.' + field ] = pullData;
+
+          var selector = { conditions: { and: andConditionsArray } }; 
+          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+
+          consolelog( rnd, "The mongoSelector is:", mongoSelector  );
+          consolelog( rnd, "The update object is: ", updateObject);
+          consolelog( rnd, "Running the update...", andConditionsArray );
+
+          parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
+
+            consolelog( rnd, "Updated:", total, "records" );
+
+            cb( null );
+          });
+
+        // CASE #6
+        // #831: 
+        } else if( params.op === 'delete' && nestedParams.type === 'lookup' ){
+
+          consolelog( rnd, "CASE #5 (delete, multiple)" );
+
+          var andConditionsArray = [];
+          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+
+          var updateObject = { '$set': {} };
+          updateObject[ '$set' ] [ params.field + '.' + field ] = {};
+
+          var selector = { conditions: { and: andConditionsArray } }; 
+          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+
+          consolelog( rnd, "The mongoSelector is:", mongoSelector  );
+          consolelog( rnd, "The update object is: ", updateObject);
+          consolelog( rnd, "Running the update...", andConditionsArray );
+
+          parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
+
+            consolelog( rnd, "Updated:", total, "records" );
+
+            cb( null );
+          });
+
+        // CASE #? -- This mustn't happen!
         } else {
-
-                    
+          consolelog( rnd, "WARNING?!? params.op and nestedParams.type are:", params.op, nestedParams.type );
 
           cb( null );
         }
-
-        
-
-        // TODO: Reinstate this
-        // If this is only to load in autoload, and autoload is off for this join,
-        // then quit it here
-        //if( ! nestedParams.autoload && params.ifAutoload ){
-        //  consolelog( rnd, "autoload is off and ifAutoLoad is on: aborting this one..." );
-        //  return cb( null );
-        //}
-
-        // Work out the select conditions based on the join, to fetch the
-        // relevant parent records
-        //var andConditionsArray = [];
-        //Object.keys( nestedParams.join ).forEach( function( joinKey ){
-        //  andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
-        //});
-
-        /*
-
-        consolelog( rnd, "Telling" , parentLayer.table, "to update refs for", layer.table, "for records matchng", andConditionsArray );
-   
-        // condition[ { 'params.field' + field + parentLayer.idProperty  } ] = record.
- 
-        // Make up the selectors. The first one is a simpledbschema selector, needed for
-        // the layer's select command. The second one is a straight MongoDb selector, needed for
-        // the update (made using the Mogodb driver directly)
-        var selector = { conditions: { and: [ { 'params.field' + field + parentLayer.idProperty  }  ]  } }; 
-        var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
-        consolelog( rnd, "The Mongo selector is: ", mongoSelector );
-  
-        var updateObject = { '$set': {} };
-        updateObject[ '$set' ] [ params.field + '.$.' + field ] = record;
-
-        consolelog( rnd, "Making the mongo update for field ", params.field + '.' + field );
-
-        consolelog( rnd, "Running the update...", andConditionsArray );
-
-
-        parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
-        
-          consolelog( rnd, "Updated:", total, "records" );
-          // End of story
-          cb( null );
-
-        });
-          
-        */
 
       },
     
@@ -749,7 +644,6 @@ var MongoMixin = declare( null, {
 
   },
 
-
  
   _updateCacheDelete: function( record, cb ){
 
@@ -759,10 +653,10 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateCacheDelete ",  self.table, ' => ', record );
 
-    self._updateParentsRecords( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+    self._updateParentsRecords( record, { field: '_children', op: 'delete' }, function( err ){
       if( err ) return cb( err );
 
-      self._updateParentsRecords( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
+      self._updateParentsRecords( record, { field: '_searchData', op: 'delete' }, function( err ){
         if( err ) return cb( err );
           
         consolelog( rnd, "EXIT: End of function." );
@@ -782,26 +676,61 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateCacheInsert ",  self.table, ' => ', record );
 
-    self._updateParentsRecords( record, { upperCase: false, field: '_children', ifAutoload: true, op: 'insert' }, function( err ){
-      if( err ) return cb( err );
+    //self._updateParentsRecords( record, { field: '_children', op: 'insert' }, function( err ){
+      //if( err ) return cb( err );
 
-      self._updateSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+      self._updateSelfWithLookups( record, { field: '_children' }, function( err ){
         if( err ) return cb( err );
 
-      //  self._updateParentsRecords( record, { upperCase: true, field: '_searchData', ifAutoload: false, op: 'insert' }, function( err ){
-      //    if( err ) return cb( err );
+        self._updateSelfWithLookups( record, { field: '_searchData' }, function( err ){
+          if( err ) return cb( err );
 
-      //    self._updateSelfWithLookups( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
-      //      if( err ) return cb( err );
-      
+          self._updateParentsRecords( record, { field: '_searchData', op: 'insert' }, function( err ){
+            if( err ) return cb( err );
 
-        consolelog( rnd, "EXIT: End of function." );
-        cb( null );
 
-      //    });
-      //  });
+            consolelog( rnd, "EXIT: End of function." );
+            cb( null );
+
+          });
+        });
 
       });
+    //});
+
+  },
+
+
+  _updateSelfWithSelfUppercase: function( record, params, cb ) {
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: _updateSelfWithSelfUppercase ",  self.table, ' => ', record );
+
+    // Make up the selector
+    var selector = {};
+    selector[ self.idProperty ] = record[ self.idProperty ];
+
+    // Make up the update object
+    var updateObject = { $set: { } };
+    for( var k in record ){
+      var newValue;
+      if( typeof( record[ k ] ) === 'string' ) newValue = record[ k ].toUpperCase();
+      else newValue = record[ k ];
+      updateObject[ '$set' ] [ params.field + '.' + k ] = newValue;
+    }
+
+    consolelog( rnd, "selector:", selector );
+    consolelog( rnd, "updateObject:", updateObject );
+
+    // Run the update based on this selector. The record will have a copy of its own fields in
+    // _searchData, all capitalised
+    self.collection.update( selector, updateObject, { multi: true }, function( err, total ){
+      consolelog( rnd, "Updated:", total, "records" );
+
+       cb( null );
     });
 
   },
@@ -815,27 +744,32 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateCacheUpdate ",  self.table, ' => ', record );
 
-    self._updateParentsRecords( record, { upperCase: false, field: '_children', ifAutoload: true, op: 'update' }, function( err ){
-      if( err ) return cb( err );
+    // This one was taken out as it's probably a bad idea
+    //self._updateParentsRecords( record, { field: '_children', op: 'update' }, function( err ){
+      //if( err ) return cb( err );
 
-      self._updateSelfWithLookups( record, { upperCase: false, field: '_children', ifAutoload: true }, function( err ){
+      self._updateSelfWithSelfUppercase( record, { field: '_searchData' }, function( err ){
         if( err ) return cb( err );
+ 
+        self._updateSelfWithLookups( record, { field: '_children' }, function( err ){
+          if( err ) return cb( err );
 
-      //  self._updateParentsRecords( record, { upperCase: true, field: '_searchData', ifAutoload: false, op: 'insert' }, function( err ){
-      //    if( err ) return cb( err );
+          self._updateParentsRecords( record, { field: '_searchData', op: 'update' }, function( err ){
+            if( err ) return cb( err );
 
-      //    self._updateSelfWithLookups( record, { upperCase: true, field: '_searchData', ifAutoload: false }, function( err ){
-      //      if( err ) return cb( err );
+            self._updateSelfWithLookups( record, { field: '_searchData' }, function( err ){
+              if( err ) return cb( err );
 
 
-        consolelog( rnd, "EXIT: End of function." );
-        cb( null );
+              consolelog( rnd, "EXIT: End of function." );
+              cb( null );
 
-      //    });
-      //  });
+            });
+          });
+        });
 
       });
-    });
+    //});
 
 
 
@@ -1081,15 +1015,32 @@ var MongoMixin = declare( null, {
       }
 
 
+      /*
+      // Make searchdata for the record itself, since every search will be based on
+      // _searchData. It will copy all fields, regarless of type, to make searching easier
+      // (although only 'string' types will be uppercased).
+      recordToBeWritten._searchData = {};
+      for( var k in recordToBeWritten ){
+        if( k !== '_searchData' && k !== '_children' ) { /// && typeof( recordToBeWritten[ k ] ) !== 'object' ){
+          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
+          if( typeof( recordToBeWritten[ k ] ) === 'string' ){
+            recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
+          }
+        }
+      }
+      */
+
       // Make sure that lookup fields are looked up, and that
       // parent records containing this record also have their
       // cache updated
-      self._updateCacheUpdate( record, function( err ){
-        if( err ) return cb( err );
 
-        // If options.multi is off, then use findAndModify which will accept sort
-        if( !options.multi ){
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
+      // If options.multi is off, then use findAndModify which will accept sort
+      if( !options.multi ){
+        self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
+          if( err ) return cb( err );
+
+
+          self._updateCacheUpdate( record, function( err ){
             if( err ) return cb( err );
 
             if( doc ){
@@ -1097,20 +1048,23 @@ var MongoMixin = declare( null, {
             } else {
               cb( null, 0 );
             }
-          });
+          })
+        });
 
         // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
-        } else {
+      } else {
 
-          // Run the query
-          self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, cb );
-        }
-      });
+        // Run the query
+        self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, function( err, total ){
+          if( err ) return cb( err );
+          self._updateCacheUpdate( record, function( err ){
+            if( err ) return cb( err ); 
+            cb( null, total );
+          });
+        })
+      };
     });
   },
-
-
-
 
 
   insert: function( record, options, cb ){
@@ -1145,18 +1099,17 @@ var MongoMixin = declare( null, {
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
       // Make searchdata for the record itself, since every search will be based on
-      // _searchData. It will copy all fields, regadrless of type, to make searching easier
+      // _searchData. It will copy all fields, regarless of type, to make searching easier
       // (although only 'string' types will be uppercased).
-      // TODO: re-establish this so that it writes the right fields, the ones without a "." in them
-      /*recordToBeWritten._searchData = {};
+      recordToBeWritten._searchData = {};
       for( var k in recordToBeWritten ){
-        if( k !== '_searchData' && k !== '_children' && typeof( recordToBeWritten[ k ] ) !== 'object' ){
+        if( k !== '_searchData' && k !== '_children' ) { // && typeof( recordToBeWritten[ k ] ) !== 'object' ){
           recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
           if( typeof( recordToBeWritten[ k ] ) === 'string' ){
             recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
           }
         }
-      }*/
+      }
 
       // Actually run the insert
       self.collection.insert( recordToBeWritten, function( err ){
@@ -1298,35 +1251,125 @@ var MongoMixin = declare( null, {
     this.collection.ensureIndex( keys, opt, function(){} );
   },
 
+  // TODO: Redo this function so that it works with the new system
+  //
+  // Make all indexes based on the schema
+  // Options can have:
+  //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
+  //   `{ style: 'simple' | 'permute' }`, which will override the indexing style set by the store
+  makeAllIndexes: function( options ){
+
+    // THANK YOU http://stackoverflow.com/questions/9960908/permutations-in-javascript
+    // Permutation function
+    function permute( input ) {
+      var permArr = [],
+      usedChars = [];
+      function main( input ){
+        var i, ch;
+        for (i = 0; i < input.length; i++) {
+          ch = input.splice(i, 1)[0];
+          usedChars.push(ch);
+          if (input.length == 0) {
+            permArr.push( usedChars.slice() );
+          }
+          main( input );
+          input.splice( i, 0, ch );
+          usedChars.pop();
+        }
+        return permArr;
+      }
+      return main(input);
+    }
+
+    var self = this;
+    var idsHash = {};
+    var style;
+    var opt = {};
+
+    // Create `opt`, the options object passed to the db driver
+    if( typeof( options ) === 'undefined' || options === null ) options = {};
+    opt.background = !!options.background;
+
+    // Sanitise the `style` parameter to either 'simple' or 'permute'
+    if( typeof( options.style ) !== 'string'  ){
+      style = self.indexStyle;
+    } else if( options.style === 'simple' || options.style === 'permute' ){
+      style = options.style;
+    } else {
+      style = self.indexStyle;
+    }
+
+    // Index this.idProperty as unique, as it must be
+    var uniqueIndexOpt = {};
+    uniqueIndexOpt.background = !! options.background;
+    uniqueIndexOpt.unique = true;
+    
+    self.dbLayer.makeIndex( this.idProperty, uniqueIndexOpt );
+
+    // Make idsHash, the common beginning of any indexing. It also creates an
+    // index with it. Not necessary in most DBs if there is at least one indexed field
+    // (partial indexes can be used), but good to have in case there aren't other fields.
+    self.paramIds.forEach( function( p ) {
+      idsHash[ p ] = 1;
+    });
+    self.dbLayer.makeIndex( idsHash, opt );
+
+    // The type of indexing will depend on the style...
+    switch( style ){
+
+      case 'simple':
+
+        // Simple style: it will create one index per field,
+        // where each index starts with paramIds
+        Object.keys( self.fields ).forEach( function( field ){
+          var keys = {};
+          for( var k in idsHash ) keys[ k ] = idsHash[ k ];
+          if( typeof( idsHash[ field ] ) === 'undefined' ){
+            keys[ field ] = 1;
+            self.dbLayer.makeIndex( keys, opt );
+          }
+        });
+
+      break;
+
+      case 'permute':
+       
+        // Complete style: it will create indexes for _all_ permutations
+        // of searchable fields, where each permutation will start with paramIds
+        var toPermute = [];
+        Object.keys( self.fields ).forEach( function( field ){
+          if( typeof( idsHash[ field ] ) === 'undefined' ) toPermute.push( field );
+        });
+
+        // Create index for each permutation
+        permute( toPermute ).forEach( function( combination ){
+          var keys = {};
+          for( var k in idsHash ) keys[ k ] = idsHash[ k ];
+
+          for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
+          self.dbLayer.makeIndex( keys, opt );
+        });
+        
+      break;
+
+      default:
+        throw( new Error("indexStyle needs to be 'simple' or 'permute'" ) );
+      break;
+
+    }
+ 
+  },
+
+  dropAllIndexes: function( done ){
+    this.dbLayer.dropAllIndexes( done );
+  },
+
   dropAllIndexes: function( done ){
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
     this.collection.dropAllIndexes( done );
   },
-
-
-
-
-
-
-  // **** DELETED FUNCTIONS ***
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 });
 
