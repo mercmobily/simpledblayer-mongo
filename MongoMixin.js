@@ -78,17 +78,18 @@ var MongoMixin = declare( null, {
           var field = fieldObject.field;
           var v = fieldObject.value;
 
+          // If it's a string, change to uppercase. All searches are case-insensitive
+          if( typeof( v ) === 'string' ) v = v.toUpperCase();
 
           // If a search is attempted on a non-searchable field, will throw
           //consolelog("SEARCHABLE HASH: ", self._searchableHash, field );
           if( !self._searchableHash[ field ] ){
-            // FIXME: reinstate this, after automatically adding the necessary indexes
-            console.log("SEARCHABLE HASH: ", self._searchableHash );
-
             throw( new Error("Field " + field + " is not searchable" ) );
           }
 
+          // Make up item. Note that any search will be based on _searchData
           var item = { };
+          field = '_searchData.' + field;
           item[ field ] = {};
 
           switch( fieldObject.type ){
@@ -242,27 +243,40 @@ var MongoMixin = declare( null, {
 
     // TODO: change the query so that the lookup gets a different query
 
-    // Make the conditions array to make the right query based on the join
-    var andConditionsArray = [];
+    // JOIN QUERY (direct)
+    var mongoSelector = {};
     Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
-      var joinValue = childTableData.nestedParams.join[ joinKey ];
-      andConditionsArray.push( { field: joinKey, type: 'eq', value: record[ joinValue ] } );
+      var joinValue = childTableData.nestedParams.join[ joinKey ]
+      mongoSelector[ joinKey ] = record[ joinValue ];
     });
+    
+    // Make the conditions array to make the right query based on the join
+    //var andConditionsArray = [];
+    //Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
+    //  var joinValue = childTableData.nestedParams.join[ joinKey ];
+    //  andConditionsArray.push( { field: joinKey, type: 'eq', value: record[ joinValue ] } );
+    //});
 
-    consolelog( rnd, "Running the select...", andConditionsArray );
+    consolelog( rnd, "Running the select with selector:", mongoSelector );
 
     // Runs the query, which will get the children element for that
     // child table depending on the join
-    childTableData.layer.select( { conditions: { and: andConditionsArray } }, function( err, res, total ){
+    //childTableData.layer.collection.find( { conditions: { and: andConditionsArray } }, function( err, res, total ){
+    childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
       if( err ) return cb( err );
 
-      consolelog( rnd, "Records fetched:", total, res );
+      consolelog( rnd, "Records fetched:", res );
    
       // For each result, add them to resultObject
       async.eachSeries(
         res,
     
         function( item, cb ){
+
+          // Since we are doing a find directly, we need to take out _id manually if
+          // it's not in the projection hash
+          if( typeof( childTableData.layer._fieldsHash._id ) === 'undefined' )  delete item._id;
+
 
           consolelog( rnd, "Considering item:", item );
    
@@ -325,7 +339,7 @@ var MongoMixin = declare( null, {
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: _updateSelfWithLookups for ", layer.table, ' => ', record );
+    consolelog( rnd, "ENTRY: _updateSelfWithLookups (" + params.field + ") for ", layer.table, ' => ', record );
 
     consolelog( rnd, "Cycling through: ", layer.lookupChildrenTablesHash,", the children of tyle 'lookup'"  );
 
@@ -336,13 +350,12 @@ var MongoMixin = declare( null, {
 
         var childTableData = layer.lookupChildrenTablesHash[ childTableKey ];
 
-        consolelog( rnd, "Working on ", childTableData.layer.table );
-        consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for record", record );
-
         var childLayer = childTableData.layer;
         var nestedParams = childTableData.nestedParams;
 
-        
+        consolelog( rnd, "Working on ", childTableData.layer.table );
+        consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", record );
+
         // Check if the key needs to be worked on
         if( !nestedParams.autoLoad ){
           consolelog( rnd, "Child key doesn't have autoLoad turned on, skipping..." );
@@ -359,7 +372,9 @@ var MongoMixin = declare( null, {
           // Make up the selectors. The first one is a simpledbschema selector, needed for
           // the layer's select command. The second one is a straight MongoDb selector, needed for
           // the update (made using the Mogodb driver directly)
-          var mongoSelector = {}; mongoSelector[ nestedParams.layer.idProperty ] = record[ nestedParams.layer.idProperty ];
+          var mongoSelector = {};
+          mongoSelector[ nestedParams.layer.idProperty ] = record[ nestedParams.layer.idProperty ];
+
           consolelog( rnd, "Using selector for the query: ", mongoSelector );
 
           //var selector = { conditions: { and: [  ] } };
@@ -482,22 +497,24 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "CASE #1 (insert, multiple)" );
 
-          var andConditionsArray = [];
+          //var andConditionsArray = [];
+          //Object.keys( nestedParams.join ).forEach( function( joinKey ){
+          //  andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
+          //});
+          //var selector = { conditions: { and: andConditionsArray } }; 
+          //var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+
+          // JOIN QUERY (reversed, look for parent)
+          var mongoSelector = {};
           Object.keys( nestedParams.join ).forEach( function( joinKey ){
-            andConditionsArray.push( { field: nestedParams.join[ joinKey ], type: 'eq', value: record[ joinKey ] } );
+            mongoSelector[ nestedParams.join[ joinKey ] ] = record[ joinKey ];
           });
 
           var updateObject = { '$push': {} };
-          
           updateObject[ '$push' ] [ params.field + '.' + field ] = { '$each': [ record ], '$slice': -1000 };
-          if( nestedParams.sort ) updateObject[ '$push' ] [ params.field + '.' + field ][ '$sort' ] = sort;
-
-          var selector = { conditions: { and: andConditionsArray } }; 
-          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
 
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ", updateObject);
-          consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
             if( err ) return cb( err );
@@ -518,18 +535,20 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "CASE #3 (update, multiple)" );
 
-          var andConditionsArray = [];
-          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          // Make up the mongo selector
+          var mongoSelector = {};
+          mongoSelector[ params.field + '.' + field + '.' + parentLayer.idProperty  ] = record[ parentLayer.idProperty ];
+
+          //var andConditionsArray = [];
+          //andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var selector = { conditions: { and: andConditionsArray } }; 
+          //var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
 
           var updateObject = { '$set': {} };
           updateObject[ '$set' ] [ params.field + '.' + field + '.$' ] = record;
 
-          var selector = { conditions: { and: andConditionsArray } }; 
-          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
-
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ", updateObject);
-          consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
             if( err ) return cb( err );
@@ -548,18 +567,20 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "CASE #4 (update, lookup)" );
 
-          var andConditionsArray = [];
-          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var andConditionsArray = [];
+          //andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var selector = { conditions: { and: andConditionsArray } }; 
+          //var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
 
           var updateObject = { '$set': {} };
           updateObject[ '$set' ] [ params.field + '.' + field ] = record;
 
-          var selector = { conditions: { and: andConditionsArray } }; 
-          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+          var mongoSelector = {};
+          mongoSelector[ params.field + '.' + field + '.' + parentLayer.idProperty ] = record[ parentLayer.idProperty ];
+
 
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ", updateObject);
-          consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
             if( err ) return cb( err );
@@ -575,20 +596,22 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "CASE #5 (delete, multiple)" );
 
-          var andConditionsArray = [];
-          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var andConditionsArray = [];
+          //andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var selector = { conditions: { and: andConditionsArray } }; 
+          //var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+
+          var mongoSelector = {};
+          mongoSelector[ params.field + '.' + field + '.' + parentLayer.idProperty ] = record[ parentLayer.idProperty ];
 
           var updateObject = { '$pull': {} };
           var pullData = {};
           pullData[ parentLayer.idProperty  ] =  record[ parentLayer.idProperty ] ;
           updateObject[ '$pull' ] [ params.field + '.' + field ] = pullData;
 
-          var selector = { conditions: { and: andConditionsArray } }; 
-          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
 
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ", updateObject);
-          consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
             if( err ) return cb( err );
@@ -604,18 +627,19 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "CASE #5 (delete, multiple)" );
 
-          var andConditionsArray = [];
-          andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var andConditionsArray = [];
+          //andConditionsArray.push( { field: params.field + '.' + field + '.' + parentLayer.idProperty, type: 'eq', value: record[ parentLayer.idProperty ] } );
+          //var selector = { conditions: { and: andConditionsArray } }; 
+          //var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
+
+          var mongoSelector = {};
+          mongoSelector[ params.field + '.' + field + '.' + parentLayer.idProperty ] = record[ parentLayer.idProperty ];
 
           var updateObject = { '$set': {} };
           updateObject[ '$set' ] [ params.field + '.' + field ] = {};
 
-          var selector = { conditions: { and: andConditionsArray } }; 
-          var mongoSelector = parentLayer._makeMongoParameters( selector ).querySelector; 
-
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ", updateObject);
-          consolelog( rnd, "Running the update...", andConditionsArray );
 
           parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
             if( err ) return cb( err );
@@ -676,7 +700,7 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateCacheInsert ",  self.table, ' => ', record );
 
-    //self._updateParentsRecords( record, { field: '_children', op: 'insert' }, function( err ){
+    self._updateParentsRecords( record, { field: '_children', op: 'insert' }, function( err ){
       //if( err ) return cb( err );
 
       self._updateSelfWithLookups( record, { field: '_children' }, function( err ){
@@ -696,7 +720,7 @@ var MongoMixin = declare( null, {
         });
 
       });
-    //});
+    });
 
   },
 
@@ -727,7 +751,7 @@ var MongoMixin = declare( null, {
 
     // Run the update based on this selector. The record will have a copy of its own fields in
     // _searchData, all capitalised
-    self.collection.update( selector, updateObject, { multi: true }, function( err, total ){
+    self.collection.update( selector, updateObject, function( err, total ){
       consolelog( rnd, "Updated:", total, "records" );
 
        cb( null );
@@ -735,8 +759,136 @@ var MongoMixin = declare( null, {
 
   },
 
+  // TODO
+  _updateMultiWithSelfUppercase: function( record, selector, params, cb ) {
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: _updateMultiWithSelfUppercase ",  self.table, ' => ', record );
+
+    return cb( null );
+
+
+    // Make up the selector
+    var selector = {};
+    selector[ self.idProperty ] = record[ self.idProperty ];
+
+    // Make up the update object
+    var updateObject = { $set: { } };
+    for( var k in record ){
+      var newValue;
+      if( typeof( record[ k ] ) === 'string' ) newValue = record[ k ].toUpperCase();
+      else newValue = record[ k ];
+      updateObject[ '$set' ] [ params.field + '.' + k ] = newValue;
+    }
+
+    consolelog( rnd, "selector:", selector );
+    consolelog( rnd, "updateObject:", updateObject );
+
+    // Run the update based on this selector. The record will have a copy of its own fields in
+    // _searchData, all capitalised
+    self.collection.update( selector, updateObject, function( err, total ){
+      consolelog( rnd, "Updated:", total, "records" );
+
+       cb( null );
+    });
+
+  },
+
+
+  // TODO
+  _updateMultiWithLookups: function( record, selector, params, cb ){
+
+    var layer = this;
+    var self = this;
+   
+    // Paranoid checks and sane defaults for params
+    if( typeof( params ) !== 'object' || params === null ) params = {};
+    if( typeof( params.field ) !== 'string' ) params.field = '_children';
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: _updateMultiWithLookups (" + params.field + ") for ", layer.table, ' => ', record );
+
+    return cb( null );
+
+    consolelog( rnd, "Cycling through: ", layer.lookupChildrenTablesHash,", the children of tyle 'lookup'"  );
+
+    // Cycle through each lookup child of the current layer
+    async.eachSeries(
+      Object.keys( layer.lookupChildrenTablesHash ),
+      function( childTableKey, cb ){
+
+        var childTableData = layer.lookupChildrenTablesHash[ childTableKey ];
+
+        var childLayer = childTableData.layer;
+        var nestedParams = childTableData.nestedParams;
+
+        consolelog( rnd, "Working on ", childTableData.layer.table );
+        consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", record );
+
+        // Check if the key needs to be worked on
+        if( !nestedParams.autoLoad ){
+          consolelog( rnd, "Child key doesn't have autoLoad turned on, skipping..." );
+          return cb( null );
+        }
+
+        // Get children data for that child table
+        // ROOT to _getChildrenData
+        layer._getChildrenData( record, nestedParams.parentField, params, function( err, childData){
+          if( err ) return cb( err );
+
+          consolelog( rnd, "The childData data is:", childData );
+
+          // Make up the selectors. The first one is a simpledbschema selector, needed for
+          // the layer's select command. The second one is a straight MongoDb selector, needed for
+          // the update (made using the Mogodb driver directly)
+          var mongoSelector = {};
+          mongoSelector[ nestedParams.layer.idProperty ] = record[ nestedParams.layer.idProperty ];
+
+          consolelog( rnd, "Using selector for the query: ", mongoSelector );
+
+          //var selector = { conditions: { and: [  ] } };
+          //var mongoSelector = layer._makeMongoParameters( selector ).querySelector;
+
+          // Set loadAs to the right value depending on the child type (lookup or multuple)
+          var loadAs = nestedParams.parentField;
+
+          consolelog( rnd, "loadAs is:", loadAs );
+
+          // Create the update object for mongoDb
+          var updateObject = { '$set': {} };
+          updateObject[ '$set' ] [ params.field + '.' + loadAs ] = childData;
+
+          consolelog( rnd, "Updating 1: " , layer.table," with selector: ", mongoSelector, "and update object:", updateObject );
+
+          // Update the collection with the new info,
+          layer.collection.update( mongoSelector, updateObject, function( err, total ){
+            if( err ) return cb( err );
+
+            consolelog( rnd, "Updated: ", total );
+            cb( null );
+          });
+        });
+
+      },
+      function( err ){
+        if( err ) return cb( err );
+
+        consolelog( rnd, "EXIT: End of function." );
+
+        cb( null );
+      }
+    );
+  },
+
+
+
+
   // Alias to updateCacheInsert
-  _updateCacheUpdate: function( record, cb ){
+  _updateCacheUpdate: function( record, type, selector, cb ){
 
     var self = this;
 
@@ -744,32 +896,73 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateCacheUpdate ",  self.table, ' => ', record );
 
-    // This one was taken out as it's probably a bad idea
-    //self._updateParentsRecords( record, { field: '_children', op: 'update' }, function( err ){
-      //if( err ) return cb( err );
 
-      self._updateSelfWithSelfUppercase( record, { field: '_searchData' }, function( err ){
+    // When of type "single", it will call _updateSelfWithSelfUppercase and _updateSelfWithLookups
+    // which will use the record's ID to work
+    if( type === 'single' ){
+
+      // This one was taken out as it's probably a bad idea
+      self._updateParentsRecords( record, { field: '_children', op: 'update' }, function( err ){
         if( err ) return cb( err );
- 
-        self._updateSelfWithLookups( record, { field: '_children' }, function( err ){
-          if( err ) return cb( err );
 
-          self._updateParentsRecords( record, { field: '_searchData', op: 'update' }, function( err ){
+        self._updateSelfWithSelfUppercase( record, { field: '_searchData' }, function( err ){
+          if( err ) return cb( err );
+ 
+          self._updateSelfWithLookups( record, { field: '_children' }, function( err ){
             if( err ) return cb( err );
 
-            self._updateSelfWithLookups( record, { field: '_searchData' }, function( err ){
+            self._updateParentsRecords( record, { field: '_searchData', op: 'update' }, function( err ){
               if( err ) return cb( err );
 
+              self._updateSelfWithLookups( record, { field: '_searchData' }, function( err ){
+                if( err ) return cb( err );
 
-              consolelog( rnd, "EXIT: End of function." );
-              cb( null );
 
+                consolelog( rnd, "EXIT: End of function." );
+                cb( null );
+              });
             });
           });
         });
 
       });
-    //});
+
+
+    // When of type "multi", things are trickier: the record doesn't have an id (probably)
+    // and it will call _updateMultiWithSelfUppercase and _updateMultiWithLookups
+    // which will use the record's ID to work
+    } else {
+
+      // This one was taken out as it's probably a bad idea
+      self._updateParentsRecords( record, { field: '_children', op: 'update' }, function( err ){
+        if( err ) return cb( err );
+
+        self._updateMultiWithSelfUppercase( record, selector, { field: '_searchData' }, function( err ){
+          if( err ) return cb( err );
+ 
+          self._updateMultiWithLookups( record, selector, { field: '_children' }, function( err ){
+            if( err ) return cb( err );
+
+            self._updateParentsRecords( record, { field: '_searchData', op: 'update' }, function( err ){
+              if( err ) return cb( err );
+
+              self._updateSelfWithLookups( record, { field: '_searchData' }, function( err ){
+                if( err ) return cb( err );
+
+                consolelog( rnd, "EXIT: End of function." );
+                cb( null );
+              });
+            });
+          });
+        });
+
+      });
+
+
+
+
+    }
+
 
 
 
@@ -797,6 +990,9 @@ var MongoMixin = declare( null, {
     } catch( e ){
       return cb( e );
     }
+
+    console.log("CHECK THIS:");
+    console.log( require('util').inspect( mongoParameters, { depth: 10 } ) );
 
     // Actually run the query 
     var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
@@ -1014,22 +1210,6 @@ var MongoMixin = declare( null, {
         return cb( e );
       }
 
-
-      /*
-      // Make searchdata for the record itself, since every search will be based on
-      // _searchData. It will copy all fields, regarless of type, to make searching easier
-      // (although only 'string' types will be uppercased).
-      recordToBeWritten._searchData = {};
-      for( var k in recordToBeWritten ){
-        if( k !== '_searchData' && k !== '_children' ) { /// && typeof( recordToBeWritten[ k ] ) !== 'object' ){
-          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
-          if( typeof( recordToBeWritten[ k ] ) === 'string' ){
-            recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
-          }
-        }
-      }
-      */
-
       // Make sure that lookup fields are looked up, and that
       // parent records containing this record also have their
       // cache updated
@@ -1039,17 +1219,15 @@ var MongoMixin = declare( null, {
         self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: recordToBeWritten, $unset: unsetObject }, function( err, doc ){
           if( err ) return cb( err );
 
-
-          self._updateCacheUpdate( record, function( err ){
-            if( err ) return cb( err );
-
-            if( doc ){
+          if( doc ){
+            self._updateCacheUpdate( recordToBeWritten, 'multi', mongoParameters.querySelector, function( err ){
+              if( err ) return cb( err );
               cb( null, 1 );
-            } else {
-              cb( null, 0 );
-            }
-          })
-        });
+            });
+          } else {
+            cb( null, 0 );
+          }
+        })
 
         // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
       } else {
@@ -1057,7 +1235,7 @@ var MongoMixin = declare( null, {
         // Run the query
         self.collection.update( mongoParameters.querySelector, { $set: recordToBeWritten, $unset: unsetObject }, { multi: true }, function( err, total ){
           if( err ) return cb( err );
-          self._updateCacheUpdate( record, function( err ){
+          self._updateCacheUpdate( record, 'single', {}, function( err ){
             if( err ) return cb( err ); 
             cb( null, total );
           });
