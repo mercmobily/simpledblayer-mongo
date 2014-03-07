@@ -57,9 +57,19 @@ var MongoMixin = declare( null, {
   },
 
 
+  _addUcPrefixToPath: function( s ){
+    var a = s.split('.');
+    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
+    return a.join('.');
+  },
+
+
+
   _makeMongoParameters: function( filters, fieldPrefix ){
 
     var self = this;
+
+    console.log("IN _makeMongoParameters");
 
     var selector = {}, finalSelector = {};
 
@@ -75,29 +85,33 @@ var MongoMixin = declare( null, {
  
         filters.conditions[ condition ].forEach( function( fieldObject ){
 
-          var field;
-          if( ! fieldPrefix ){
-            field = fieldObject.field;
+          if( fieldPrefix ) {
+            fieldPrefix = fieldPrefix + '.';
           } else {
-            field = fieldPrefix + '.' + fieldObject.field;
+            fieldPrefix = '';
           }
 
+          var field = fieldObject.field;
           var v = fieldObject.value;
-
-          // If it's a string, change to uppercase. All searches are case-insensitive
-          if( typeof( v ) === 'string' ) v = v.toUpperCase();
 
           // If a search is attempted on a non-searchable field, will throw
           //consolelog("SEARCHABLE HASH: ", self._searchableHash, field );
-          if( !self._searchableHash[ field ] ){
-            console.log( self._searchableHash );
-            console.log( filters.conditions );
-            throw( new Error("Field " + field + " is not searchable" ) );
+          if( !self._searchableHash[ fieldPrefix + field ] ){
+            throw( new Error("Field " + fieldPrefix + field + " is not searchable" ) );
+          }
+
+         // Change 'field' so that it includes the full path, including the prefix.
+         // If it's a string, change to uppercase search (uppercase v, and search on __uc__ field)
+         // This way, all searches are case-insensitive
+          if( self._searchableHash[ fieldPrefix + field ] === 'upperCase' ){
+            v = v.toUpperCase();
+            field = fieldPrefix + '__uc__' + field;
+          } else {
+            field = fieldPrefix + field;
           }
 
           // Make up item. Note that any search will be based on _searchData
           var item = { };
-          field = '_searchData.' + field;
           item[ field ] = {};
 
           switch( fieldObject.type ){
@@ -169,8 +183,8 @@ var MongoMixin = declare( null, {
         }
 
       }
-      // consolelog( "FINAL SELECTOR" );        
-      // consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
+      //consolelog( "FINAL SELECTOR" );        
+      //consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
 
     };    
 
@@ -179,34 +193,21 @@ var MongoMixin = declare( null, {
     // sorting happens regardless of upper or lower case
     var sortHash = {};
     for( var field  in filters.sort ) {
-      // if( self._searchableHash[ field ] )  var finalField = '__uc__' + field; else finalField = field;
-      sortHash[ field ] = filters.sort[ field ];
+
+      // This code will end up with fieldManipulated, which is
+      // field.some.other => field.some.__uc__other if needed
+      if( self._searchableHash[ field ] === 'upperCase' ){
+        fieldManipulated = self._addUcPrefixToPath( field );
+      } else if( self._searchableHash[ field ] ){
+        fieldManipulated = field;
+      }
+      sortHash[ fieldManipulated ] = filters.sort[ field ];
     }
     //consolelog( "FINAL SORTHASH", self.table );        
     //consolelog( require('util').inspect( sortHash, { depth: 10 } ) );        
 
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
-
-  _toUpperCaseNewRecord: function( record ){
-    var newRecord = {};
-    for( var k in record ){
-      if( typeof( record[ k ] ) === 'string' ){
-        newRecord[ k ] = record[ k ].toUpperCase();
-      } else {
-        newRecord[ k ] = record[ k ];
-      }
-    }
-    return newRecord;
-  },
-
-
-  _toUpperCaseRecord: function( record ){
-    for( var k in record ){
-      if( typeof( record[ k ] ) === 'string' ) record[ k ] = record[ k ].toUpperCase();
-    }
-  },
-
 
   /* This function takes a layer, a record and a child table, and
      makes sure that record._children.field is populated with
@@ -250,7 +251,7 @@ var MongoMixin = declare( null, {
         resultObject = {};
       break;
     }
-    
+   
     // JOIN QUERY (direct)
     var mongoSelector = {};
     Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
@@ -258,7 +259,7 @@ var MongoMixin = declare( null, {
       mongoSelector[ joinKey ] = record[ joinValue ];
     });
     
-    consolelog( rnd, "Running the select with selector:", mongoSelector );
+    consolelog( rnd, "Running the select with selector:", mongoSelector, "on table", childTableData.layer.table );
 
     // Runs the query, which will get the children element for that
     // child table depending on the join
@@ -281,12 +282,6 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "Considering item:", item );
    
-          // Make the record uppercase if so required
-          //if( params.field === '_searchData' ){
-          //  consolelog( rnd, "UpperCasing the item as it's a _searchData");
-          //  self._toUpperCaseRecord( item );
-          //}
-
           // Assign the loaded item to the resultObject
           // making sure that it's in the right spot (depending on the type)
           switch( childTableData.nestedParams.type ){
@@ -341,6 +336,10 @@ var MongoMixin = declare( null, {
     var self = this;
     var layer = this;
 
+
+    // TODO: fix this
+    return cb( null ); 
+
     // Paranoid checks and sane defaults for params
     if( typeof( params ) !== 'object' || params === null ) params = {};
 
@@ -351,11 +350,6 @@ var MongoMixin = declare( null, {
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
     consolelog( rnd, "ENTRY: _updateParentsRecords, op: ", params.op, ", table:", layer.table, ', record:', params.record, ", filters: ", params.filters, ", unsetObject:", params.unsetObject );
-
-    // First of all, if params.field is _searchData, the record needs to be upperCased
-    //if( params.field === '_searchData' ){
-    //  self._toUpperCaseRecord( record );
-    //}
 
     consolelog( rnd, "Cycling through: ", layer.parentTablesArray );
 
@@ -426,7 +420,6 @@ var MongoMixin = declare( null, {
 
           var updateObject = { '$push': {} };
           updateObject[ '$push' ] [ '_children' + '.' + field ] = { '$each': [ record ], '$slice': -1000 };
-          updateObject[ '$push' ] [ '_searchData' + '.' + field ] = { '$each': [ self._toUpperCaseNewRecord( record ) ], '$slice': -1000 };
 
           consolelog( rnd, "The mongoSelector is:", mongoSelector  );
           consolelog( rnd, "The update object is: ");
@@ -458,7 +451,6 @@ var MongoMixin = declare( null, {
           
 
           var updateObject = { '$set': {} };
-          updateObject[ '$set' ] [ '_searchData' + '.' + field + '.$' ] = self._toUpperCaseNewRecord( record );
           updateObject[ '$set' ] [ '_children' + '.' + field + '.$' ] = record;
 
           consolelog( rnd, "The mongoSelector is:");
@@ -817,16 +809,14 @@ var MongoMixin = declare( null, {
        
   },
 
-
   update: function( filters, record, options, cb ){
 
     var self = this;
     var layer = this;
-    var actualRecord = {};
+    var recordCleanedUp = {};
 
-    var updateRecord = {};
+    var updateObject = {};
     var unsetObject = {};
-
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
@@ -850,35 +840,41 @@ var MongoMixin = declare( null, {
         return cb( new Error("The options parameter must be a non-null object") );
       }
 
-      // Make up actualRecord, containing only allowed fields.
-      // ALSO, creating updateRecord which includes the '_searchData' update for local cache
+      // Make up recordCleanedUp, containing only allowed fields.
+      // ALSO, creating updateObject which includes the '_searchData' update for local cache
       for( var k in record ){
         if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ){
-          actualRecord[ k ] = record[ k ];
+          recordCleanedUp[ k ] = record[ k ];
 
-          updateRecord[ k ] = record[ k ];
-          updateRecord[ '_searchData.' + k ] = typeof( record[ k ] ) === 'string' ? record[ k ].toUpperCase() : record[ k ];
+          updateObject[ k ] = record[ k ];
         }
       }
+
+      self._addUcFields( updateObject );
 
       // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
       // so that partial PUTs will "overwrite" whole objects rather than
       // just overwriting fields that are _actually_ present in `body`
       if( options.deleteUnsetFields ){
         Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( updateRecord[ i ] ) === 'undefined' && i !== '_id' ){
+           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' ){
              unsetObject[ i ] = 1;
 
-             unsetObject[ '_searchData.' + i ] = 1;
+             // Get rid of __uc__ objects if the equivalent field was out
+             if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
+               unsetObject[ '__uc__' + i ] = 1;
+             }
+
            }
         });
       }
 
+
       // Cycle through each lookup child of the current record,
       // and -- if so required by `searchable` or `autoLoad` --
-      // changes the updateRecord accordingly
+      // changes the updateObject accordingly
       async.eachSeries(
-        Object.keys( actualRecord ),
+        Object.keys( recordCleanedUp ),
 
         function( recordKey, cb ){
       
@@ -895,29 +891,19 @@ var MongoMixin = declare( null, {
             var nestedParams = childTableData.nestedParams;
 
             consolelog( rnd, "Working on ", childTableData.layer.table );
-            consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", actualRecord );
-
-            // Autoload is off, and it's not searchable: no point in doing anything
-            if( ! nestedParams.autoLoad && ! nestedParams.searchable ){
-              return cb( null );
-            }
+            consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordCleanedUp );
 
             // Get children data for that child table
             // ROOT to _getChildrenData
-            layer._getChildrenData( actualRecord, recordKey, function( err, childData){
+            layer._getChildrenData( recordCleanedUp, recordKey, function( err, childData){
               if( err ) return cb( err );
+
+              childLayer._addUcFields( childData );
+              childData._children = {};
 
               consolelog( rnd, "The childData data is:", childData );
 
-              // Augment the updateRecord variable with the fetched children
-              if( nestedParams.autoLoad ){
-                updateRecord[ '_searchData.' + recordKey ] = childData;
-              }
-              if( nestedParams.searchable ){
-                // Make the record uppercase since it's for a search
-                self._toUpperCaseRecord( childData );
-                updateRecord[ '_children.' + recordKey ] = childData;
-              }
+              updateObject[ '_children.' + recordKey ] = childData;
 
               // That's it!
               cb( null );
@@ -938,16 +924,16 @@ var MongoMixin = declare( null, {
             return cb( e );
           }
 
-          consolelog( rnd, "About to update. At this point, updateRecord is:", updateRecord );
+          consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
           consolelog( rnd, "Selector:", mongoParameters.querySelector );
 
           // If options.multi is off, then use findAndModify which will accept sort
           if( !options.multi ){
-            self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateRecord, $unset: unsetObject }, function( err, doc ){
+            self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObject, $unset: unsetObject }, function( err, doc ){
               if( err ) return cb( err );
 
               if( doc ){
-                self._updateCacheUpdate( actualRecord, filters, unsetObject, function( err ){
+                self._updateCacheUpdate( recordCleanedUp, filters, unsetObject, function( err ){
                   if( err ) return cb( err );
                   cb( null, 1 );
                 });
@@ -959,10 +945,10 @@ var MongoMixin = declare( null, {
             // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
           } else {
             // Run the query
-            self.collection.update( mongoParameters.querySelector, { $set: updateRecord, $unset: unsetObject }, { multi: true }, function( err, total ){
+            self.collection.update( mongoParameters.querySelector, { $set: updateObject, $unset: unsetObject }, { multi: true }, function( err, total ){
               if( err ) return cb( err );
 
-              self._updateCacheUpdate( actualRecord, filters, unsetObject, function( err ){
+              self._updateCacheUpdate( recordCleanedUp, filters, unsetObject, function( err ){
                 if( err ) return cb( err ); 
                 cb( null, total );
               });
@@ -977,17 +963,27 @@ var MongoMixin = declare( null, {
 
   },
 
+  _addUcFields: function( record ){
+    var self = this;
+
+    for( var k in record ){
+      if( self._searchableHash[ k ] === 'upperCase' ){
+        record[ '__uc__' + k ] = record[ k ].toUpperCase();
+      }
+    }
+  },
 
   insert: function( record, options, cb ){
 
     var self = this;
     var layer = this;
+    var recordCleanedUp = {};
     var recordToBeWritten = {};
 
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: update for ", layer.table, ' => ', record );
+    consolelog( rnd, "ENTRY: insert for ", layer.table, ' => ', record );
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -1008,41 +1004,37 @@ var MongoMixin = declare( null, {
 
       // Copy record over, only for existing fields
       for( var k in record ){
-        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' ) recordToBeWritten[ k ] = record[ k ];
+        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' ) recordCleanedUp[ k ] = record[ k ];
+      }
+
+      consolelog( rnd, "recordCleanedUp is:", recordCleanedUp );
+
+      // Prepare recordToBeWritten
+      for( var k in recordCleanedUp ){
+        recordToBeWritten[ k ] = recordCleanedUp[ k ];
       }
 
       // Every record in Mongo MUST have an _id field
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
-      
-      // Evety record will need to have _searchData and _children
-      recordToBeWritten._searchData = {};
-      recordToBeWritten._children = {};
 
-      // Make searchdata for the record itself, since every search will be based on
-      // _searchData. It will copy all fields, regarless of type, to make searching easier
-      // (although only 'string' types will be uppercased).
-      for( var k in recordToBeWritten ){
-        if( k !== '_searchData' && k !== '_children' ) { // && typeof( recordToBeWritten[ k ] ) !== 'object' ){
-          recordToBeWritten._searchData[ k ] = recordToBeWritten[ k ];
-          if( typeof( recordToBeWritten[ k ] ) === 'string' ){
-            recordToBeWritten._searchData[ k ] = recordToBeWritten._searchData[ k ].toUpperCase();
-          }
-        }
-      }
+      // Every record will need to have _searchData and _children
+
+      self._addUcFields( recordToBeWritten );
+
+      recordToBeWritten._children = {};
 
       // Prepare the ground: for each child table of type "multiple", add an
       // empty value in recordToBeWritten.[children & searchData] as an empty
       // array. Future updates and inserts might add/delete/update records in there
       Object.keys( layer.childrenTablesHash ).forEach( function( k ){
         if( layer.childrenTablesHash[ k ].nestedParams.type === 'multiple' ){
-          recordToBeWritten._searchData[ k ] = [];
           recordToBeWritten._children[ k ] = [];
         } 
       });
 
       // Cycle through each lookup child of the current record,
       // and -- if so required by `searchable` or `autoLoad` --
-      // changes the updateRecord accordingly
+      // changes the record accordingly
       async.eachSeries(
         Object.keys( recordToBeWritten ),
 
@@ -1063,8 +1055,14 @@ var MongoMixin = declare( null, {
             consolelog( rnd, "Working on ", childTableData.layer.table );
             consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordToBeWritten );
 
-            // Autoload is off, and it's not searchable: no point in doing anything
-            if( ! nestedParams.autoLoad && ! nestedParams.searchable ){
+            // EXCEPTION: check if the record being looked up isn't the same as the one
+            // being added. This is an edge case, but it's nice to cover it
+            if( childLayer.table === self.table && recordToBeWritten[ self.idProperty ] === recordToBeWritten[ recordKey ] ){
+
+              childLayer._addUcFields( recordCleanedUp );
+              recordCleanedUp._children = {};
+              recordToBeWritten._children[ recordKey ] = recordCleanedUp;
+        
               return cb( null );
             }
 
@@ -1073,17 +1071,14 @@ var MongoMixin = declare( null, {
             layer._getChildrenData( recordToBeWritten, recordKey, function( err, childData){
               if( err ) return cb( err );
 
+              childLayer._addUcFields( childData );
+              childData._children = {};
+
               consolelog( rnd, "The childData data is:", childData );
 
-              // Augment the updateRecord variable with the fetched children
-              if( nestedParams.autoLoad ){
-                recordToBeWritten._searchData[ recordKey ] = childData;
-              }
-              if( nestedParams.searchable ){
-                // Make the record uppercase since it's for a search
-                self._toUpperCaseRecord( childData );
-                recordToBeWritten._children[ recordKey ] = childData;
-              }
+
+              // Make the record uppercase since it's for a search
+              recordToBeWritten._children[ recordKey ] = childData;
 
               // That's it!
               cb( null );
@@ -1098,8 +1093,6 @@ var MongoMixin = declare( null, {
           if( err ) return cb( err );
 
           consolelog( rnd, "About to insert. At this point, recordToBeWritten is:", recordToBeWritten );
-
-        
 
           // Actually run the insert
           self.collection.insert( recordToBeWritten, function( err ){
