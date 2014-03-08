@@ -222,15 +222,13 @@ var MongoMixin = declare( null, {
   }, 
 
   /* This function takes a layer, a record and a child table, and
-     makes sure that record._children.field is populated with
-     children's information.
-     Once each sub-record is added to record._children.childTable, the
-     method _completeRecord() is called to make sure that the record's
-     own _children are fully filled
+     returns children data about that field.
+     The return value might be an array (for 1:n relationships) or a
+     straight object (for lookups);
 
      NOTE: In mongoDbLayer, this function is only really used for lookups
-     by _updateSelfWithLookups(), as 1:n children are actually added/updated/deleted
-     by spefific functions that will affect the parent's correct subarray
+     as 1:n sub-records are obviously only added to the master one when the
+     sub-record is added.
   */
   _getChildrenData: function( record, field, cb ){
 
@@ -338,10 +336,7 @@ var MongoMixin = declare( null, {
    If you update a child record, any parent containing a reference to it
    will need to be updated.
    This is built to be _fast_: there is only one extra update for each
-   parent table. When #831 is fixed in MongoDb, it will be possible to have
-   nested tables and populate children after the first level
-   Until then, there is no point in having recursion here as MongoDb cannot update
-   inner arrays deeper than 1 level atomically (sigh)
+   parent table. 
   */
   _updateParentsRecords: function( params, cb ){
 
@@ -387,82 +382,79 @@ var MongoMixin = declare( null, {
         }
         console.log( rnd, "field for ", nestedParams.type, "is:", field );
 
-        /* SIX CASES:
-          * CASE #1 Insert into a multiple one 
-              Push into _children.addresses[] where the (reversed) join is satisfied
-          * CASE #2 Insert into lookup
-              Do nothing
+        /* THREE CASES:
+          * CASE #1: Insert
+          * CASE #2: Update
+          * CASE #3: Delete
 
-          * CASE #3 Update into a multiple one
-              (single update) Update to new info where _children.addresses.id is the same as record.id
-              (multi  update)
+                              *** DO NOT OPTIMISE THIS CODE ***
 
-          * CASE #4 Update into lookup
-              (single update) Update the new info where _children.country.id is the same as record.id
-              (multi  update) 
-
-          * CASE #5 Delete from multiple one
-
-          * CASE #6 Delete from lookup
+          I REPEAT: DO NOT OPTIMISE THIS CODE.
+          This code has the potential to become the most uncomprehensible thing ever written. Worse than Perl.
+          Optimising here is simple -- and even tempting. DON'T. Clarity here is MUCH more important than
+          terseness.
         */
 
-        // CASE #1
+        // CASE #1 -- INSERT
 
-        if( params.op === 'insert' && nestedParams.type === 'multiple' ){
+        if( params.op === 'insert' ){
 
-          consolelog( rnd, "CASE #1 (insert, multiple)" );
+          if( nestedParams.type === 'multiple' ){
 
-          // Assign the parameters
-          var record = params.record;
+            consolelog( rnd, "CASE #1 (insert, multiple)" );
 
-          // JOIN QUERY (reversed, look for parent)
-          var mongoSelector = {};
-          Object.keys( nestedParams.join ).forEach( function( joinKey ){
-            mongoSelector[ nestedParams.join[ joinKey ] ] = record[ joinKey ];
-          });
+            // Assign the parameters
+            var record = params.record;
 
-          // The updateRecord variable is the same as record, but with uc fields and _children added
-          var insertRecord = {};
-          for( var k in record ) insertRecord[ k ] = record[ k ];
-          self._addUcFields( insertRecord );
-          insertRecord._children = {};
+            // JOIN QUERY (reversed, look for parent)
+            var mongoSelector = {};
+            Object.keys( nestedParams.join ).forEach( function( joinKey ){
+              mongoSelector[ nestedParams.join[ joinKey ] ] = record[ joinKey ];
+            });
 
-          var updateObject = { '$push': {} };
-          updateObject[ '$push' ] [ '_children' + '.' + field ] = { '$each': [ insertRecord ], '$slice': -1000 };
+            // The updateRecord variable is the same as record, but with uc fields and _children added
+            var insertRecord = {};
+            for( var k in record ) insertRecord[ k ] = record[ k ];
+            self._addUcFields( insertRecord );
+            insertRecord._children = {};
 
-          consolelog( rnd, "The mongoSelector is:", mongoSelector  );
-          consolelog( rnd, "The update object is: ");
-          consolelog( require('util').inspect( updateObject, { depth: 10 } ) );
+            var updateObject = { '$push': {} };
+            updateObject[ '$push' ] [ '_children' + '.' + field ] = { '$each': [ insertRecord ], '$slice': -1000 };
 
-          parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
-            if( err ) return cb( err );
+            consolelog( rnd, "The mongoSelector is:", mongoSelector  );
+            consolelog( rnd, "The update object is: ");
+            consolelog( require('util').inspect( updateObject, { depth: 10 } ) );
 
-            consolelog( rnd, "Record inserted in sub-array" );
+            parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
+              if( err ) return cb( err );
 
-            cb( null );
+              consolelog( rnd, "Record inserted in sub-array" );
+
+              cb( null );
            
-          });
+            });
 
-        // CASE #2
-        } else if( params.op === 'insert' && nestedParams.type === 'lookup' ){
-          return cb( null );
-        // noop
+          // noop
+          } else if( nestedParams.type === 'lookup' ){
+
+            return cb( null );
+          }
 
 
-        // CASE #3
+        // CASE #2 -- UPDATE
 
-        } else if( ( params.op === 'updateOne' || params.op === 'updateMany' ) && nestedParams.type === 'multiple' ){
-
-          consolelog( rnd, "CASE #3 (update, multiple)", params.op );
+        } else if( params.op === 'updateOne' || params.op === 'updateMany' ){
 
           if( params.op === 'updateOne' ){
+
+            consolelog( rnd, "CASE #2 (updateOne)", params.op );
             
             // Assign the parameters
             var id = params.id;
             var updateObject = params.updateObject;
             var unsetObject = params.unsetObject;
-
-            var prefix = '_children.' + field + '.$.';
+ 
+            var prefix = '_children.' + field + ( nestedParams.type === 'multiple' ?  '.$.' : '.' ) ;
 
             // Make up relative update objects based on the original ones,
             // with extra path added
@@ -492,6 +484,8 @@ var MongoMixin = declare( null, {
 
           if( params.op === 'updateMany' ){
 
+            consolelog( rnd, "CASE #2 (updateMany)", params.op );
+
             // Assign the parameters
             var filters = params.filters;
             var updateObject = params.updateObject;
@@ -506,7 +500,7 @@ var MongoMixin = declare( null, {
               return cb( e );
             }
 
-            var prefix = '_children.' + field + '.$.';
+            var prefix = '_children.' + field + ( nestedParams.type === 'multiple' ?  '.$.' : '.' );
 
             // Make up relative update objects based on the original ones,
             // with extra path added
@@ -529,128 +523,94 @@ var MongoMixin = declare( null, {
 
           }
 
-        // CASE #4 TODO
+        // CASE #3 -- DELETE
+        } else if( params.op === 'deleteOne' || params.op === 'deleteMany' ){
 
-        } else if( ( params.op === 'updateOne' || params.op === 'updateMany' ) && nestedParams.type === 'lookup' ){
+          if( params.op === 'deleteOne' ){
 
-          consolelog( rnd, "CASE #4 (update, lookup)", params.op );
+            consolelog( rnd, "CASE #3 (deleteOne)", params.op );
 
-          if( params.op === 'updateOne' ){
-            
             // Assign the parameters
             var id = params.id;
-            var updateObject = params.updateObject;
-            var unsetObject = params.unsetObject;
 
-            return cb( null );
+            var updateObject = {};
 
+            var selector = {};
+            selector[ '_children.' + field + "." + parentLayer.idProperty ] = id;
+
+            // It's a lookup field: it will assign an empty object
+            if( nestedParams.type === 'lookup' ){
+              updateObject[ '$set' ] = {};
+              updateObject[ '$set'] [ '_children.' + field ] = {};
+
+            // It's a multiple one: it will $pull the element out
+            } else {
+              updateObject[ '$pull' ] = {};
+
+              var pullData = {};
+              pullData[ parentLayer.idProperty  ] =  id ;
+              updateObject[ '$pull' ] [ '_children.' + field ] = pullData;
+            }
+
+            consolelog( rnd, "Selector:");
+            consolelog( selector );
+            consolelog( rnd, "UpdateObject:");
+            consolelog( updateObject );
+
+            parentLayer.collection.update( selector, updateObject, { multi: true }, function( err, total ){
+              if( err ) return cb( err );
+
+              consolelog( rnd, "Deleted", total, "sub-records" );
+
+              return cb( null );
+
+            });
           }
 
-          if( params.op === 'updateMany' ){
+          if( params.op === 'deleteMany' ){
+
+            consolelog( rnd, "CASE #3 (deleteMany)", params.op );
 
             // Assign the parameters
             var filters = params.filters;
-            var updateObject = params.updateObject;
-            var unsetObject = params.unsetObject;
+
+            // Make up parameters from the passed filters
+            try {
+              var mongoParameters = parentLayer._makeMongoParameters( filters, field );
+            } catch( e ){
+              return cb( e );
+            }
+
+            // Make up parameters from the passed filters
+            try {
+              var mongoParametersForPull = parentLayer._makeMongoParameters( filters );
+            } catch( e ){
+              return cb( e );
+            }
 
 
-            return cb( null );
-          }
+            // The update object will depend on whether it's a push or a pull
+            var updateObject = {};
 
+            // It's a lookup field: it will assign an empty object
+            if( nestedParams.type === 'lookup' ){
+              updateObject[ '$set' ] = {};
+              updateObject[ '$set'] [ '_children.' + field ] = {};
 
+            // It's a multiple one: it will $pull the elementS (with an S, plural) out
+            } else {
+              updateObject[ '$pull' ] = {};
+              updateObject[ '$pull' ] [ '_children.' + field ] = mongoParametersForPull.querySelector;
+            }
 
-          /*
-          mongoSelector = parentLayer._makeMongoParameters( params.filters, field );
-          consolelog( rnd, "mongoSelector.querySelector is: ", mongoSelector.querySelector );
-
-          var updateObject = { '$set': {} };
-          updateObject[ '$set' ] [ '_children' + '.' + field ] = record;
-
-          consolelog( rnd, "The mongoSelector is:", mongoSelector  );
-          consolelog( rnd, "The update object is: ", updateObject);
-
-          parentLayer.collection.update( mongoSelector.querySelector, updateObject, { multi: true }, function( err, total ){
-            if( err ) return cb( err );
-
-            consolelog( rnd, "Updated:", total, "records" );
-
-            // End of story
-            cb( null );
-
-          });
-          */
-
-
-        // CASE #5 TODO
-        } else if( ( params.op === 'deleteOne' || params.op === 'deleteMany' ) && nestedParams.type === 'multiple' ){
-
-          consolelog( rnd, "CASE #5 (delete, multiple)", params.op );
-
-          if( params.op === 'deleteOne' ){
+            parentLayer.collection.update( mongoParameters.querySelector, updateObject, { multi: true }, function( err, total ){
+              if( err ) return cb( err );
+              consolelog( rnd, "deleted", total, "sub-records" );
             
-            // Assign the parameters
-            var id = params.id;
-            var updateObject = params.updateObject;
-            var unsetObject = params.unsetObject;
-
-            return cb( null );
-          }
-
-          if( params.op === 'deleteMany' ){
-
-            // Assign the parameters
-            var querySelector = params.querySelector;
-            var updateObject = params.updateObject;
-            var unsetObject = params.unsetObject;
-
-            return cb( null );
-          }
-
-
-          /*
-          parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
-            if( err ) return cb( err );
-
-            consolelog( rnd, "Updated:", total, "records" );
-
-            cb( null );
-          });
-          */
-
-
-        // CASE #6 TODO
-        } else if( ( params.op === 'deleteOne' || params.op === 'deleteMany' ) && nestedParams.type === 'lookup' ){
-
-          consolelog( rnd, "CASE #6 (delete, lookup)", params.op );
-
-          if( params.op === 'deleteOne' ){
-            
-            // Assign the parameters
-            var id = params.id;
-
-            return cb( null );
+              return cb( null );
+            });
 
           }
-
-          if( params.op === 'deleteMany' ){
-
-            // Assign the parameters
-            var querySelector = params.querySelector;
-
-            return cb( null );
-          }
-
-
-          /*
-
-          parentLayer.collection.update( mongoSelector, updateObject, { multi: true }, function( err, total ){
-            if( err ) return cb( err );
-
-            consolelog( rnd, "Updated:", total, "records" );
-
-            cb( null );
-          });
-          */
 
         // CASE #? -- This mustn't happen!
         } else {
@@ -916,15 +876,31 @@ var MongoMixin = declare( null, {
         Object.keys( self._fieldsHash ).forEach( function( i ){
            if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' ){
              unsetObject[ i ] = 1;
+           }
+        });
+      }
+
+
+      // ****************************************************************
+      // *********** MongoDB-SPECIFIC JOIN STUFF STARTS HERE ************
+      // ****************************************************************
+
+      // Mirrors what happens with the "normal" fields for the MongoDb-specific __uc__ ones
+      // This is in a different section because I want to group ALL of the
+      // MongoDb-specific join/children stuff in one section of the code
+      if( options.deleteUnsetFields ){
+        Object.keys( self._fieldsHash ).forEach( function( i ){
+           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' ){
 
              // Get rid of __uc__ objects if the equivalent field was out
              if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
                unsetObject[ '__uc__' + i ] = 1;
              }
-
            }
         });
       }
+
+
 
       // Create the update object specific for the parents update, without _children
       // (At least for now, children records do not expand _children in any way)
@@ -979,6 +955,10 @@ var MongoMixin = declare( null, {
 
         function( err ){
           if( err ) return cb( err );
+
+          // ****************************************************************
+          // *********** MongoDB-SPECIFIC JOIN STUFF ENDS   HERE ************
+          // ****************************************************************
 
           // Make up parameters from the passed filters
           try {
@@ -1077,6 +1057,11 @@ var MongoMixin = declare( null, {
 
       consolelog( rnd, "recordCleanedUp is:", recordCleanedUp );
 
+
+      // ****************************************************************
+      // *********** MongoDB-SPECIFIC JOIN STUFF STARTS HERE ************
+      // ****************************************************************
+
       // Prepare recordToBeWritten
       for( var k in recordCleanedUp ){
         recordToBeWritten[ k ] = recordCleanedUp[ k ];
@@ -1085,10 +1070,10 @@ var MongoMixin = declare( null, {
       // Every record in Mongo MUST have an _id field
       if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
 
-      // Every record will need to have _searchData and _children
-
+      // Add __uc__ fields to the record
       self._addUcFields( recordToBeWritten );
 
+      // Each added record needs to be ready for its _children
       recordToBeWritten._children = {};
 
       // Prepare the ground: for each child table of type "multiple", add an
@@ -1144,7 +1129,6 @@ var MongoMixin = declare( null, {
 
               consolelog( rnd, "The childData data is:", childData );
 
-
               // Make the record uppercase since it's for a search
               recordToBeWritten._children[ recordKey ] = childData;
 
@@ -1161,6 +1145,10 @@ var MongoMixin = declare( null, {
           if( err ) return cb( err );
 
           consolelog( rnd, "About to insert. At this point, recordToBeWritten is:", recordToBeWritten );
+
+          // ****************************************************************
+          // *********** MongoDB-SPECIFIC JOIN STUFF ENDS   HERE ************
+          // ****************************************************************
 
           // Actually run the insert
           self.collection.insert( recordToBeWritten, function( err ){
@@ -1227,7 +1215,7 @@ var MongoMixin = declare( null, {
     } else {
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
  
-        self._updateParentsRecords( { op: 'deleteMany', querySelector: mongoParameters.querySelector }, function( err ){
+        self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
           if( err ) return cb( err );
          
           cb( null, total );
