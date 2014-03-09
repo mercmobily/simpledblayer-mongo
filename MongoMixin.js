@@ -64,12 +64,30 @@ var MongoMixin = declare( null, {
   },
 
 
+  // If there are ".", then some children records are being referenced.
+  // The actual way they are placed in the record is in _children; so,
+  // add _children where needed.
+  _makeMongoFieldPath: function( s ){
+
+    if( s.match(/\./ ) ){
+
+      var l = s.split( /\./ );
+      for( var i = 0; i < l.length-1; i++ ){
+        l[ i ] = '_children.' + l[ i ];
+      }
+      return l.join( '.' );
+
+    } else {
+      return s;
+    }
+   
+  },
+
+
 
   _makeMongoParameters: function( filters, fieldPrefix ){
 
     var self = this;
-
-    console.log("IN _makeMongoParameters");
 
     var selector = {}, finalSelector = {};
 
@@ -111,16 +129,10 @@ var MongoMixin = declare( null, {
             field = fieldPrefix + field;
           }
 
-           // If there are ".", then some children records are being referenced.
-           // The actual way they are placed in the record is in _children; so,
-           // add _children where needed.
-           if( field.match(/\./ ) ){
-             var l = field.split( /\./ );
-             for( var i = 0; i < l.length-1; i++ ){
-               l[ i ] = '_children.' + l[ i ];
-             }
-             field = l.join( '.' );
-           }
+          // If there are ".", then some children records are being referenced.
+          // The actual way they are placed in the record is in _children; so,
+          // add _children where needed.
+          field = self._makeMongoFieldPath( field );
 
           // Make up item. Note that any search will be based on _searchData
           var item = { };
@@ -348,7 +360,7 @@ var MongoMixin = declare( null, {
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: _updateParentsRecords ");
+    consolelog( rnd, "ENTRY: _updateParentsRecords on table", self.table );
     consolelog( rnd, 'Params:' );
     consolelog( require('util').inspect( params, { depth: 10 } ) );
 
@@ -623,7 +635,7 @@ var MongoMixin = declare( null, {
     
       function( err ){
         if( err ) return cb( err );
-        consolelog( rnd, "EXIT: End of function." );
+        consolelog( rnd, "EXIT: End of function ( _updateParentsRecords)" );
         cb( null );
       }
     );
@@ -917,12 +929,12 @@ var MongoMixin = declare( null, {
 
         function( recordKey, cb ){
       
-          consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
+          //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
           if( ! layer.lookupChildrenTablesHash[ recordKey ] ){
-            consolelog( rnd, "It isn't! Ignoring it...");
+            //consolelog( rnd, "It isn't! Ignoring it...");
             return cb( null );
           } else {
-            consolelog( rnd, "It is! Processing it...");
+            consolelog( rnd, recordKey, "Is a lookup table!");
 
             var childTableData = layer.lookupChildrenTablesHash[ recordKey ];
 
@@ -1093,12 +1105,13 @@ var MongoMixin = declare( null, {
 
         function( recordKey, cb ){
       
-          consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
+          //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
           if( ! layer.lookupChildrenTablesHash[ recordKey ] ){
-            consolelog( rnd, "It isn't! Ignoring it...");
+            //consolelog( rnd, "It isn't! Ignoring it...");
             return cb( null );
           } else {
             consolelog( rnd, "It is! Processing it...");
+            consolelog( rnd, recordKey, "Is a lookup table!");
 
             var childTableData = layer.lookupChildrenTablesHash[ recordKey ];
 
@@ -1286,16 +1299,30 @@ var MongoMixin = declare( null, {
 
   },
 
-  makeIndex: function( keys, options ){
+  makeIndex: function( keys, name, options, cb ){
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
+
+    console.log("Making indexes for table", this.table, "and keys:");
+    console.log( keys );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
     opt.unique = !!options.unique;
-    if( typeof( options.name ) === 'string' )  opt.name = options.name;
+    if( typeof( name ) === 'string' )  opt.name = name;
 
-    this.collection.ensureIndex( keys, opt, function(){} );
+    this.collection.ensureIndex( keys, opt, function( err ){
+      if( err ){
+        console.log("THERE WAS AN ERROR WITH KEYS:");
+        console.log( keys );
+        console.log( opt );
+        return cb( err );
+      }
+      console.log("IT WORKED!");
+        console.log( keys );
+        console.log( opt );
+      cb( null );
+    });
   },
 
   // TODO: Redo this function so that it works with the new system
@@ -1304,7 +1331,18 @@ var MongoMixin = declare( null, {
   // Options can have:
   //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
   //   `{ style: 'simple' | 'permute' }`, which will override the indexing style set by the store
-  makeAllIndexes: function( options ){
+
+
+
+  makeAllIndexes: function( options, cb ){
+
+    var self = this;
+
+    console.log("SEARCHABLE AND INDEXES:");
+    console.log(self._searchableHash );
+    console.log(self._permutationGroups );
+    indexMakers = [];
+    var autoNumber = 0;
 
     // THANK YOU http://stackoverflow.com/questions/9960908/permutations-in-javascript
     // Permutation function
@@ -1328,7 +1366,65 @@ var MongoMixin = declare( null, {
       return main(input);
     }
 
-    var self = this;
+
+    Object.keys( self._permutationGroups ).forEach( function( f ){
+
+      var permutationEntry = self._permutationGroups[ f ];
+
+      var prefixes = [];
+      var fields = [];
+      
+      Object.keys( permutationEntry.prefixes ).forEach( function( prefix ){
+        var entryValue = permutationEntry.prefixes[ prefix ];
+        prefix = self._makeMongoFieldPath( prefix );
+        
+        if( entryValue === 'upperCase' ){
+          prefix = self._addUcPrefixToPath( prefix );
+        }
+        prefixes.push( prefix );
+      });
+
+      Object.keys( permutationEntry.fields ).forEach( function( field ){
+        var entryValue = permutationEntry.fields[ field ];
+        field = self._makeMongoFieldPath( field );
+        
+        if( entryValue === 'upperCase' ){
+          field = self._addUcPrefixToPath( field );
+        }
+        fields.push( field );
+      });
+
+      console.log( "RESULT FOR", f );
+      console.log( prefixes );
+      console.log( fields );
+
+      console.log( "KEYS:" );
+      permute( fields ).forEach( function( combination ){
+        var keys = {};
+
+        for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
+        for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
+        
+        console.log( keys );
+
+        // Adds this index maker to the list
+        indexMakers.push( function( cb ){
+          self.makeIndex( keys, 'autoPermuted-' + autoNumber, options, cb );
+          autoNumber ++;
+        });
+
+      });
+    });
+
+    async.series( indexMakers, cb );
+
+    // TODO: Add single indexes
+
+    return;
+
+
+   
+
     var idsHash = {};
     var style;
     var opt = {};
