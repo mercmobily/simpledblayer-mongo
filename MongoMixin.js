@@ -209,26 +209,28 @@ var MongoMixin = declare( null, {
       }
       //consolelog( "FINAL SELECTOR" );        
       //consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
-
     };    
 
     // make sortHash
-    // If field is searchable, swap field names for _uc_ equivalent so that
+    // If field is marked as upperCase, swap field names for _uc_ equivalent so that
     // sorting happens regardless of upper or lower case
     var sortHash = {};
-    for( var field  in filters.sort ) {
 
-      // This code will end up with fieldManipulated, which is
-      // field.some.other => field.some.__uc__other if needed
-      if( self._searchableHash[ field ] === 'upperCase' ){
-        fieldManipulated = self._addUcPrefixToPath( field );
-      } else if( self._searchableHash[ field ] ){
-        fieldManipulated = field;
+    for( var field  in filters.sort ) {
+      var sortDirection = filters.sort[ field ]
+
+      if( self._sortableHash[ field ] ){
+
+        field = self._makeMongoFieldPath( field );
+        if( self._sortableHash[ field ] === 'upperCase' ){
+          field = self._addUcPrefixToPath( field );
+        }
+
+        sortHash[ field ] = sortDirection;
       }
-      sortHash[ fieldManipulated ] = filters.sort[ field ];
     }
-    //consolelog( "FINAL SORTHASH", self.table );        
-    //consolelog( require('util').inspect( sortHash, { depth: 10 } ) );        
+    consolelog( "FINAL SORTHASH", self.table );        
+    consolelog( require('util').inspect( sortHash, { depth: 10 } ) );        
 
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
@@ -482,10 +484,8 @@ var MongoMixin = declare( null, {
             var selector = {};
             selector[ '_children.' + field + "." + parentLayer.idProperty ] = id;
 
-            parentLayer.collection.update( selector, { $set: relativeUpdateObject, $unset: relativeUnsetObject }, function( err, doc ){
+            parentLayer.collection.update( selector, { $set: relativeUpdateObject, $unset: relativeUnsetObject }, { multi: true }, function( err, total ){
               if( err ) return cb( err );
-
-              var total = doc ? 1 : 0;
 
               consolelog( rnd, "Updated:", total, "records" );
 
@@ -661,6 +661,12 @@ var MongoMixin = declare( null, {
       var mongoParameters = this._makeMongoParameters( filters );
     } catch( e ){
       return cb( e );
+    }
+
+    // If sortHash is empty, AND there is a self.positionField, then sort
+    // by the element's position
+    if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
+      mongoParameters.sortHash[ self.positionField ] = 1;
     }
 
     //console.log("CHECK THIS:");
@@ -886,7 +892,7 @@ var MongoMixin = declare( null, {
       // just overwriting fields that are _actually_ present in `body`
       if( options.deleteUnsetFields ){
         Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' ){
+           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
              unsetObject[ i ] = 1;
            }
         });
@@ -1069,7 +1075,6 @@ var MongoMixin = declare( null, {
 
       consolelog( rnd, "recordCleanedUp is:", recordCleanedUp );
 
-
       // ****************************************************************
       // *********** MongoDB-SPECIFIC JOIN STUFF STARTS HERE ************
       // ****************************************************************
@@ -1167,17 +1172,21 @@ var MongoMixin = declare( null, {
           self.collection.insert( recordToBeWritten, function( err ){
             if( err ) return cb( err );
 
-            self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
+            self.position( recordToBeWritten, options.beforeId ? options.beforeId : null, function( err ){
               if( err ) return cb( err );
 
-              if( ! options.returnRecord ) return cb( null );
-
-              self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+              self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
                 if( err ) return cb( err );
 
-                if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                if( ! options.returnRecord ) return cb( null );
 
-                cb( null, doc );
+                self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
+                  if( err ) return cb( err );
+
+                  if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+                  cb( null, doc );
+                });
               });
             });
           });
@@ -1239,7 +1248,7 @@ var MongoMixin = declare( null, {
 
   },
 
-  relocation: function( positionField, idProperty, id, moveBeforeId, conditionsHash, cb ){
+  position: function( record, moveBeforeId, cb ){
 
     function moveElement(array, from, to) {
       if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
@@ -1247,55 +1256,93 @@ var MongoMixin = declare( null, {
 
     var self = this;
 
-    // Sane value to filterHash
-    if( typeof( conditionsHash ) === 'undefined' || conditionsHash === null ) conditionsHash = {};
+    var positionField = self.positionField;
+    var idProperty = self.idProperty;
+    var conditionsHash = {};
+    var id = record[ idProperty ];
 
-    //consolelog("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
+    var updateCalls = [];
 
-    // Case #1: Change moveBeforeId
+
+    consolelog("REPOSITIONING RUN");
+
+    // No position field: nothing to do
+    if( !positionField ){
+       consolelog("No positionField for this table, not repositioning... ");
+       return cb( null );
+    }
+    consolelog("YES POSITION FIELD");
+    
+
+    // Make up conditionsHash based on the positionBase array
+    var conditionsHash = { and: [] };
+    for( var i = 0, l = self.positionBase.length -1; i < l; i ++ ){
+      var positionBaseField = self.positionBase[ i ];
+      conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
+    }
+
+    consolelog("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
+
+    // Run the select, ordered by the positionField and satisfying the positionBase
     var sortParams = { };
     sortParams[ positionField ] = 1;
     self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
       if( err ) return cb( err );
-      //consolelog("DATA BEFORE: ", data );
 
+      consolelog("DATA BEFORE: ", data );
+      
+      // Working out `from` and `to` as positional numbers
       var from, to;
       data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
-      //consolelog("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
+      consolelog("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
       if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
         to = data.length;
-        //consolelog( "LENGTH OF DATA: " , data.length );
+        consolelog( "LENGTH OF DATA: " , data.length );
       } else {
-        //consolelog("MOVE BEFORE ID WAS PASSED, LOOKING FOR ITEM BY HAND...");
+        consolelog("MOVE BEFORE ID WAS PASSED, LOOKING FOR ITEM BY HAND...");
         data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
       }
 
       //consolelog("from: ", from, ", to: ", to );
 
+      // Actually move the elements
       if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
-        //consolelog("SWAPPINGGGGGGGGGGGGGG...");
+        consolelog("SWAPPINGGGGGGGGGGGGGG...");
 
         if( to > from ) to --;
         moveElement( data, from, to);
+
+        consolelog("DATA AFTER: ", data );
+
+        // Actually change the values on the DB so that they have the right order
+        var updateCalls = [];
+        data.forEach( function( item, i ){
+
+          console.log("Item: ", item, i );
+          var updateTo = {};
+          updateTo[ positionField ] = i + 100;
+
+          updateCalls.push( function( cb ){
+            var mongoSelector = {};
+            mongoSelector[ idProperty ] = item[ idProperty ];
+            consolelog("UPDATING...", mongoSelector, { $set: updateTo } );
+            self.collection.update( mongoSelector, { $set: updateTo }, cb );
+          });
+
+        });
+        
+        // Runs the updates in series, calling the final callback at the end
+        async.series( updateCalls , cb );
+        // cb( null );
+
+      } else {
+
+        // Something went wrong, no changes will be made
+        cb( null );
       }
 
-      //consolelog("DATA AFTER: ", data );
-
-      // Actually change the values on the DB so that they have the right order
-      var item;
-      for( var i = 0, l = data.length; i < l; i ++ ){
-        item = data[ i ];
-
-        updateTo = {};
-        updateTo[ positionField ] = i + 100;
-        //consolelog("UPDATING...");
-        self.update( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo, function(err,n){ /*consolelog("ERR: " , err,n ); */} );
-        //consolelog( item.name, require('util').inspect( { conditions: { and: [ { field: idProperty, type: 'eq', value: item[ idProperty ] } ] } }, updateTo , function(){} ) );
-        //consolelog( updateTo );
-      };
-
-      cb( null );        
     });     
+    
 
   },
 
@@ -1303,8 +1350,8 @@ var MongoMixin = declare( null, {
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
-    console.log("Making indexes for table", this.table, "and keys:");
-    console.log( keys );
+    consolelog("Making indexes for table", this.table, "and keys:");
+    consolelog( keys );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
@@ -1312,61 +1359,30 @@ var MongoMixin = declare( null, {
     if( typeof( name ) === 'string' )  opt.name = name;
 
     this.collection.ensureIndex( keys, opt, function( err ){
-      if( err ){
-        console.log("THERE WAS AN ERROR WITH KEYS:");
-        console.log( keys );
-        console.log( opt );
-        return cb( err );
-      }
-      console.log("IT WORKED!");
-        console.log( keys );
-        console.log( opt );
+      if( err ) return cb( err );
+
       cb( null );
     });
   },
 
-  // TODO: Redo this function so that it works with the new system
-  //
   // Make all indexes based on the schema
   // Options can have:
   //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
-  //   `{ style: 'simple' | 'permute' }`, which will override the indexing style set by the store
-
-
 
   makeAllIndexes: function( options, cb ){
 
     var self = this;
+    var indexMakers = [];
+    var autoNumber = 0;
+
+    var opt = {};
+    if( options.background ) opt.background = true;
 
     console.log("SEARCHABLE AND INDEXES:");
     console.log(self._searchableHash );
     console.log(self._permutationGroups );
-    indexMakers = [];
-    var autoNumber = 0;
 
-    // THANK YOU http://stackoverflow.com/questions/9960908/permutations-in-javascript
-    // Permutation function
-    function permute( input ) {
-      var permArr = [],
-      usedChars = [];
-      function main( input ){
-        var i, ch;
-        for (i = 0; i < input.length; i++) {
-          ch = input.splice(i, 1)[0];
-          usedChars.push(ch);
-          if (input.length == 0) {
-            permArr.push( usedChars.slice() );
-          }
-          main( input );
-          input.splice( i, 0, ch );
-          usedChars.pop();
-        }
-        return permArr;
-      }
-      return main(input);
-    }
-
-
+    // Add permutations to indexes
     Object.keys( self._permutationGroups ).forEach( function( f ){
 
       var permutationEntry = self._permutationGroups[ f ];
@@ -1399,7 +1415,7 @@ var MongoMixin = declare( null, {
       console.log( fields );
 
       console.log( "KEYS:" );
-      permute( fields ).forEach( function( combination ){
+      self._permute( fields ).forEach( function( combination ){
         var keys = {};
 
         for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
@@ -1409,108 +1425,52 @@ var MongoMixin = declare( null, {
 
         // Adds this index maker to the list
         indexMakers.push( function( cb ){
-          self.makeIndex( keys, 'autoPermuted-' + autoNumber, options, cb );
+          self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
           autoNumber ++;
         });
 
       });
     });
 
-    async.series( indexMakers, cb );
+    // Add individual searchable fields to indexes
+    Object.keys( self._searchableHash ).forEach( function( field ){
+      var keys = {};
 
-    // TODO: Add single indexes
+      var entryValue = self._searchableHash[ field ];
 
-    return;
-
-
-   
-
-    var idsHash = {};
-    var style;
-    var opt = {};
-
-    // Create `opt`, the options object passed to the db driver
-    if( typeof( options ) === 'undefined' || options === null ) options = {};
-    opt.background = !!options.background;
-
-    // Sanitise the `style` parameter to either 'simple' or 'permute'
-    if( typeof( options.style ) !== 'string'  ){
-      style = self.indexStyle;
-    } else if( options.style === 'simple' || options.style === 'permute' ){
-      style = options.style;
-    } else {
-      style = self.indexStyle;
-    }
-
-    // Index this.idProperty as unique, as it must be
-    var uniqueIndexOpt = {};
-    uniqueIndexOpt.background = !! options.background;
-    uniqueIndexOpt.unique = true;
-    
-    self.dbLayer.makeIndex( this.idProperty, uniqueIndexOpt );
-
-    // Make idsHash, the common beginning of any indexing. It also creates an
-    // index with it. Not necessary in most DBs if there is at least one indexed field
-    // (partial indexes can be used), but good to have in case there aren't other fields.
-    self.paramIds.forEach( function( p ) {
-      idsHash[ p ] = 1;
-    });
-    self.dbLayer.makeIndex( idsHash, opt );
-
-    // The type of indexing will depend on the style...
-    switch( style ){
-
-      case 'simple':
-
-        // Simple style: it will create one index per field,
-        // where each index starts with paramIds
-        Object.keys( self.fields ).forEach( function( field ){
-          var keys = {};
-          for( var k in idsHash ) keys[ k ] = idsHash[ k ];
-          if( typeof( idsHash[ field ] ) === 'undefined' ){
-            keys[ field ] = 1;
-            self.dbLayer.makeIndex( keys, opt );
-          }
-        });
-
-      break;
-
-      case 'permute':
-       
-        // Complete style: it will create indexes for _all_ permutations
-        // of searchable fields, where each permutation will start with paramIds
-        var toPermute = [];
-        Object.keys( self.fields ).forEach( function( field ){
-          if( typeof( idsHash[ field ] ) === 'undefined' ) toPermute.push( field );
-        });
-
-        // Create index for each permutation
-        permute( toPermute ).forEach( function( combination ){
-          var keys = {};
-          for( var k in idsHash ) keys[ k ] = idsHash[ k ];
-
-          for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
-          self.dbLayer.makeIndex( keys, opt );
-        });
+      field = self._makeMongoFieldPath( field );
         
-      break;
+      if( entryValue === 'upperCase' ){
+        field = self._addUcPrefixToPath( field );
+      }
 
-      default:
-        throw( new Error("indexStyle needs to be 'simple' or 'permute'" ) );
-      break;
+      keys[ field ] = 1;
+          
+      // Adds this index maker to the list
+      indexMakers.push( function( cb ){
+        self.makeIndex( keys, null, opt, cb );
+      });
 
-    }
- 
+      console.log("SINGLE KEYS FOR", self.table );
+      console.log( keys );
+    });
+
+
+    // TODO: CHECK http://stackoverflow.com/questions/22291038/clarification-on-sorting-subsets-in-mongodb
+    // Adds the positionField
+    //if( self.positionfield ){
+    //  indexMakers.push( function( cb ){
+    //    self.makeIndex( keys, null, opt, cb );
+    //  });
+    //}
+
+    // All done: now _actually_ create the indexes
+    // (indexMarkers is an array of callbacks, each one creating one index)
+    async.series( indexMakers, cb );
   },
 
-  dropAllIndexes: function( done ){
-    this.dbLayer.dropAllIndexes( done );
-  },
 
   dropAllIndexes: function( done ){
-    //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
-    var opt = {};
-
     this.collection.dropAllIndexes( done );
   },
 
