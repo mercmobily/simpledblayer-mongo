@@ -56,35 +56,8 @@ var MongoMixin = declare( null, {
     MongoMixin.makeId( object, cb );
   },
 
-
-  _addUcPrefixToPath: function( s ){
-    var a = s.split('.');
-    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
-    return a.join('.');
-  },
-
-
-  // If there are ".", then some children records are being referenced.
-  // The actual way they are placed in the record is in _children; so,
-  // add _children where needed.
-  _makeMongoFieldPath: function( s ){
-
-    if( s.match(/\./ ) ){
-
-      var l = s.split( /\./ );
-      for( var i = 0; i < l.length-1; i++ ){
-        l[ i ] = '_children.' + l[ i ];
-      }
-      return l.join( '.' );
-
-    } else {
-      return s;
-    }
-   
-  },
-
-
-
+  // Make parameters for queries. It's the equivalent of what would be
+  // an SQL creator for a SQL layer
   _makeMongoParameters: function( filters, fieldPrefix ){
 
     var self = this;
@@ -191,7 +164,6 @@ var MongoMixin = declare( null, {
       // * Just $or conditions : { '$or': [ this, that, other ] }
       // * $and conditions with $or: { '$and': [ this, that, other, { '$or': [ blah, bleh, bligh ] } ] }
 
-
       // No `$and` conditions...
       if( selector[ '$and' ].length === 0 ){
         // ...maybe there are `or` ones, which will get returned
@@ -235,6 +207,917 @@ var MongoMixin = declare( null, {
     return { querySelector: finalSelector, sortHash: sortHash };
   }, 
 
+
+ 
+  select: function( filters, options, cb ){
+
+    var self = this;
+    var saneRanges;
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // Make up parameters from the passed filters
+    try {
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
+
+    // If sortHash is empty, AND there is a self.positionField, then sort
+    // by the element's position
+    if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
+      mongoParameters.sortHash[ self.positionField ] = 1;
+    }
+
+    //console.log("CHECK THIS:");
+    //console.log( require('util').inspect( mongoParameters, { depth: 10 } ) );
+
+    // Actually run the query 
+    var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
+    //consolelog("FIND IN SELECT: ",  mongoParameters.querySelector, self._projectionHash );
+
+    // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
+    // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
+    saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
+
+    // Skipping/limiting according to ranges/limits
+    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
+    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
+
+    // Sort the query
+    cursor.sort( mongoParameters.sortHash , function( err ){
+      if( err ){
+        next( err );
+      } else {
+
+        if( options.useCursor ){
+
+          cursor.count( function( err, grandTotal ){
+            if( err ){
+              cb( err );
+            } else {
+
+              cursor.count( { applySkipLimit: true }, function( err, total ){
+                if( err ){
+                  cb( err );
+                } else {
+
+                  cb( null, {
+      
+                    next: function( done ){
+      
+                      cursor.nextObject( function( err, obj) {
+                        if( err ){
+                          done( err );
+                        } else {
+      
+                          // If options.delete is on, then remove a field straight after fetching it
+                          if( options.delete && obj !== null ){
+                            self.collection.remove( { _id: obj._id }, function( err, howMany ){
+                              if( err ){
+                                done( err );
+                              } else {
+
+                                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                                self.schema.validate( obj, function( err, obj, errors ){
+
+                                  // If there is an error, end of story
+                                  // If validation fails, call callback with self.SchemaError
+                                  if( err ) return cb( err );
+                                  //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                                  done( null, obj );
+                                });
+                              }
+                            });
+                          } else {
+
+                            if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                            if( obj === null ) return done( null, obj );
+
+                            self.schema.validate( obj, function( err, obj, errors ){
+
+                              // If there is an error, end of story
+                              // If validation fails, call callback with self.SchemaError
+                              if( err ) return cb( err );
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                              done( null, obj );
+                            });
+                              
+                          }
+                        }
+                      });
+                    },
+      
+                    rewind: function( done ){
+                      if( options.delete ){
+                        done( new Error("Cannot rewind a cursor with `delete` option on") );
+                      } else {
+                        cursor.rewind();
+                        done( null );
+                      }
+                    },
+                    close: function( done ){
+                      cursor.close( done );
+                    }
+                  }, total, grandTotal );
+
+                }
+              });
+
+            }
+          });
+
+        } else {
+
+          cursor.toArray( function( err, queryDocs ){
+            if( err ){
+             cb( err );
+            } else {
+
+              cursor.count( function( err, grandTotal ){
+                if( err ){
+                  cb( err );
+                } else {
+
+                  cursor.count( { applySkipLimit: true }, function( err, total ){
+                    if( err ){
+                      cb( err );
+                    } else {
+
+                      // Cycle to work out the toDelete array _and_ get rid of the _id_
+                      // from the resultset
+                      var toDelete = [];
+                      queryDocs.forEach( function( doc ){
+                        if( options.delete ) toDelete.push( doc._id );
+                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                      });
+
+                      // If it was a delete, delete each record
+                      // Note that there is no check whether the delete worked or not
+                      if( options.delete ){
+                        toDelete.forEach( function( _id ){
+                          self.collection.remove( { _id: _id }, function( err ){ } );
+                        });
+                      }
+
+                      var changeFunctions = [];
+                      // Validate each doc, running a validate function for each one of them in parallel
+                      queryDocs.forEach( function( doc, index ){
+
+                        changeFunctions.push( function( callback ){
+                          self.schema.validate( doc, function( err, validatedDoc, errors ){
+                            if( err ){
+                              callback( err );
+                            } else {
+
+                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+                              queryDocs[ index ] = validatedDoc;
+                               
+                              callback( null );
+                            }
+                          });
+                        });
+                      }); 
+                      async.parallel( changeFunctions, function( err ){
+                        if( err ) return cb( err );
+
+                        // That's all!
+                        cb( null, queryDocs, total, grandTotal );
+                      });
+
+                    };
+                  });
+
+                };
+              });
+
+            };
+          })
+
+        }
+      }
+    });
+       
+  },
+
+
+  update: function( filters, updateObject, options, cb ){
+
+    var self = this;
+
+    var unsetObject = {};
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: update for ", self.table, ' => ', updateObject, "options:", options );
+
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // Validate the record against the schema
+    // NOTE: Since it's an update, `onlyObjectValues` is set to true
+    self.schema.validate( updateObject, { onlyObjectValues: true }, function( err, updateObject, errors ){
+
+      // If there is an error, end of story
+      // If validation fails, call callback with self.SchemaError
+      if( err ) return cb( err );
+
+      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+      //for( var k in record ){
+      //  if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ){
+      //    updateObject[ k ] = record[ k ];
+      //  }
+      //}
+
+      // The _id field cannot be updated. If it's there,
+      // simply delete it
+      delete updateObject[ '_id' ];
+
+      // Add __uc__ fields to the updateObject (they are the uppercase fields
+      // used for filtering of string fields)
+      self._addUcFields( updateObject );
+
+      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
+      // so that partial PUTs will "overwrite" whole objects rather than
+      // just overwriting fields that are _actually_ present in `body`
+      if( options.deleteUnsetFields ){
+        Object.keys( self._fieldsHash ).forEach( function( i ){
+           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
+             unsetObject[ i ] = 1;
+
+             // Get rid of __uc__ objects if the equivalent field was out
+             if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
+               unsetObject[ '__uc__' + i ] = 1;
+             }
+
+           }
+        });
+      }
+
+      // Make up parameters from the passed filters
+      try {
+        var mongoParameters = self._makeMongoParameters( filters );
+      } catch( e ){
+        return cb( e );
+      }
+
+      consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
+      consolelog( rnd, "Selector:", mongoParameters.querySelector );
+
+      self._makeUpdateObjectWithLookups( updateObject, function( err, updateObjectWithLookups ){
+        if( err ) return cb( err );
+
+        consolelog( rnd, "Update object with lookups:", updateObjectWithLookups );
+
+        // If options.multi is off, then use findAndModify which will accept sort
+        if( !options.multi ){
+
+          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObject }, function( err, doc ){
+            if( err ) return cb( err );
+
+            if( doc ){
+
+              // MONGO: Change parents so that the one record is updated
+              self._updateParentsRecords( { op: 'updateOne', id: doc[ self.idProperty ], updateObject: updateObject, unsetObject: unsetObject }, function( err ){
+                if( err ) return cb( err );
+
+                cb( null, 1 );
+              });
+            } else {
+              cb( null, 0 );
+            }
+          });
+
+        // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
+        // (With SimpleDbLayer you cannot decide to do  mass update un a limited number of records)
+        } else {
+
+          // Run the query
+          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObject }, { multi: true }, function( err, total ){
+            if( err ) return cb( err );
+
+            // MONGO: Change parents so that the one record is updated
+            self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
+              if( err ) return cb( err );
+
+              cb( null, total );
+            });
+          });
+        };
+
+      });
+    });
+
+  },
+
+
+  insert: function( record, options, cb ){
+
+    var self = this;
+    var recordWithLookups = {};
+
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY: insert for ", self.table, ' => ', record );
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // Validate the record against the schema
+    self.schema.validate( record, function( err, record, errors ){
+
+      // If there is an error, end of story
+      // If validation fails, call callback with self.SchemaError
+      if( err ) return cb( err );
+      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+      // Copy record over, only for existing fields
+      // Deleted, as at this point if a field doesn't belong to the schema
+      // an exception will be raised
+      //for( var k in record ){
+      //  if( typeof( self._fieldsHash[ k ] ) !== 'undefined' ) recordCleanedUp[ k ] = record[ k ];
+      //}
+
+      consolelog( rnd, "record after validation:", record );
+
+      // Add __uc__ fields to the record
+      self._addUcFields( record );
+
+      consolelog( rnd, "record with __uc__ fields:", record );
+ 
+      self._makeRecordWithLookups( record, function( err, recordWithLookups ){
+        if( err ) return cb( err );
+     
+        consolelog( rnd, "recordWithLookups is:", recordWithLookups);
+
+        // Every record in Mongo MUST have an _id field. Note that I do this here
+        // so that record doesn't include an _id field when self._makeRecordWithLookups
+        // is called (which would imply that $pushed, non-main children elements would also
+        // have _id
+        if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = ObjectId();
+
+        consolelog( rnd, "record with _id added:", record );
+
+        // Actually run the insert
+        self.collection.insert( recordWithLookups, function( err ){
+          if( err ) return cb( err );
+
+          self.position( recordWithLookups, options.beforeId ? options.beforeId : null, function( err ){
+            if( err ) return cb( err );
+
+            self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
+              if( err ) return cb( err );
+
+              if( ! options.returnRecord ) return cb( null );
+
+              self.collection.findOne( { _id: recordWithLookups._id }, self._projectionHash, function( err, doc ){
+                if( err ) return cb( err );
+
+                if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+                cb( null, doc );
+              });
+            });
+          });
+        });
+      });
+    });
+  },
+
+
+  'delete': function( filters, options, cb ){
+
+    var self = this;
+
+    // Usual drill
+    if( typeof( cb ) === 'undefined' ){
+      cb = options;
+      options = {}
+    } else if( typeof( options ) !== 'object' || options === null ){
+      return cb( new Error("The options parameter must be a non-null object") );
+    }
+
+    // Run the query
+    try { 
+      var mongoParameters = this._makeMongoParameters( filters );
+    } catch( e ){
+      return cb( e );
+    }
+
+    // If options.multi is off, then use findAndModify which will accept sort
+    if( !options.multi ){
+      self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
+        if( err ) return cb( err );
+
+        if( doc ){
+
+          self._updateParentsRecords( { op: 'deleteOne', id: doc[ self.idProperty ] }, function( err ){
+            if( err ) return cb( err );
+
+            cb( null, 1 );
+          });
+
+        } else {
+          cb( null, 0 );
+        }
+      });
+
+    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
+    } else {
+      self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
+ 
+        self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
+          if( err ) return cb( err );
+         
+          cb( null, total );
+        });
+ 
+      });
+    }
+
+  },
+
+  position: function( record, moveBeforeId, cb ){
+
+    function moveElement(array, from, to) {
+      if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
+    }
+
+    var self = this;
+
+    var positionField = self.positionField;
+    var idProperty = self.idProperty;
+    var conditionsHash = {};
+    var id = record[ idProperty ];
+
+    var updateCalls = [];
+
+
+    //consolelog("REPOSITIONING RUN");
+
+    // No position field: nothing to do
+    if( !positionField ){
+       //consolelog("No positionField for this table, not repositioning... ");
+       return cb( null );
+    }
+    //consolelog("YES POSITION FIELD");
+    
+    // Make up conditionsHash based on the positionBase array
+    var conditionsHash = { and: [] };
+    for( var i = 0, l = self.positionBase.length -1; i < l; i ++ ){
+      var positionBaseField = self.positionBase[ i ];
+      conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
+    }
+
+    //consolelog("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
+
+    // Run the select, ordered by the positionField and satisfying the positionBase
+    var sortParams = { };
+    sortParams[ positionField ] = 1;
+    self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
+      if( err ) return cb( err );
+
+      //consolelog("DATA BEFORE: ", data );
+      
+      // Working out `from` and `to` as positional numbers
+      var from, to;
+      data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
+      //consolelog("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
+      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
+        to = data.length;
+        //consolelog( "LENGTH OF DATA: " , data.length );
+      } else {
+        //consolelog("MOVE BEFORE ID WAS PASSED, LOOKING FOR ITEM BY HAND...");
+        data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
+      }
+
+      //consolelog("from: ", from, ", to: ", to );
+
+      // Actually move the elements
+      if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
+        //consolelog("SWAPPINGGGGGGGGGGGGGG...");
+
+        if( to > from ) to --;
+        moveElement( data, from, to);
+
+        //consolelog("DATA AFTER: ", data );
+
+        // Actually change the values on the DB so that they have the right order
+        var updateCalls = [];
+        data.forEach( function( item, i ){
+
+          //console.log("Item: ", item, i );
+          var updateTo = {};
+          updateTo[ positionField ] = i + 100;
+
+          updateCalls.push( function( cb ){
+            var mongoSelector = {};
+            mongoSelector[ idProperty ] = item[ idProperty ];
+            //consolelog("UPDATING...", mongoSelector, { $set: updateTo } );
+            self.collection.update( mongoSelector, { $set: updateTo }, cb );
+          });
+
+        });
+        
+        // Runs the updates in series, calling the final callback at the end
+        async.series( updateCalls , cb );
+        // cb( null );
+
+      } else {
+
+        // Something went wrong, no changes will be made
+        cb( null );
+      }
+
+    });     
+    
+
+  },
+
+  makeIndex: function( keys, name, options, cb ){
+    //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
+    var opt = {};
+
+    consolelog("Making indexes for table", this.table, "and keys:");
+    consolelog( keys );
+
+    if( typeof( options ) === 'undefined' || options === null ) options = {};
+    opt.background = !!options.background;
+    opt.unique = !!options.unique;
+    if( typeof( name ) === 'string' )  opt.name = name;
+
+    this.collection.ensureIndex( keys, opt, function( err ){
+      if( err ) return cb( err );
+
+      cb( null );
+    });
+  },
+
+  // Make all indexes based on the schema
+  // Options can have:
+  //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
+
+  makeAllIndexes: function( options, cb ){
+
+    var self = this;
+    var indexMakers = [];
+    var autoNumber = 0;
+
+    var opt = {};
+    if( options.background ) opt.background = true;
+
+    console.log("SEARCHABLE AND INDEXES:");
+    console.log(self._searchableHash );
+    console.log(self._permutationGroups );
+
+    // Add permutations to indexes
+    Object.keys( self._permutationGroups ).forEach( function( f ){
+
+      var permutationEntry = self._permutationGroups[ f ];
+
+      var prefixes = [];
+      var fields = [];
+      
+      Object.keys( permutationEntry.prefixes ).forEach( function( prefix ){
+        var entryValue = permutationEntry.prefixes[ prefix ];
+        prefix = self._makeMongoFieldPath( prefix );
+        
+        if( entryValue === 'upperCase' ){
+          prefix = self._addUcPrefixToPath( prefix );
+        }
+        prefixes.push( prefix );
+      });
+
+      Object.keys( permutationEntry.fields ).forEach( function( field ){
+        var entryValue = permutationEntry.fields[ field ];
+        field = self._makeMongoFieldPath( field );
+        
+        if( entryValue === 'upperCase' ){
+          field = self._addUcPrefixToPath( field );
+        }
+        fields.push( field );
+      });
+
+      console.log( "RESULT FOR", f );
+      console.log( prefixes );
+      console.log( fields );
+
+      console.log( "KEYS:" );
+      self._permute( fields ).forEach( function( combination ){
+        var keys = {};
+
+        for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
+        for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
+        
+        console.log( keys );
+
+        // Adds this index maker to the list
+        indexMakers.push( function( cb ){
+          self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
+          autoNumber ++;
+        });
+
+      });
+    });
+
+    // Add individual searchable fields to indexes
+    Object.keys( self._searchableHash ).forEach( function( field ){
+      var keys = {};
+
+      var entryValue = self._searchableHash[ field ];
+
+      field = self._makeMongoFieldPath( field );
+        
+      if( entryValue === 'upperCase' ){
+        field = self._addUcPrefixToPath( field );
+      }
+
+      keys[ field ] = 1;
+          
+      // Adds this index maker to the list
+      indexMakers.push( function( cb ){
+        self.makeIndex( keys, null, opt, cb );
+      });
+
+      console.log("SINGLE KEYS FOR", self.table );
+      console.log( keys );
+    });
+
+
+    // TODO: CHECK http://stackoverflow.com/questions/22291038/clarification-on-sorting-subsets-in-mongodb
+    // Adds the positionField
+    //if( self.positionfield ){
+    //  indexMakers.push( function( cb ){
+    //    self.makeIndex( keys, null, opt, cb );
+    //  });
+    //}
+
+    // All done: now _actually_ create the indexes
+    // (indexMarkers is an array of callbacks, each one creating one index)
+    async.series( indexMakers, cb );
+  },
+
+
+  dropAllIndexes: function( done ){
+    this.collection.dropAllIndexes( done );
+  },
+
+
+
+  // *****************************************************************
+  // *****************************************************************
+  // ****              MONGO-SPECIFIC FUNCTIONS                   ****
+  // ****              FOR JOINS AND UPPERCASING                  ****
+  // ****                                                         ****
+  // **** These functions are here to address mongoDb's lack of   ****
+  // **** joins by manipulating records' contents when a parent   ****
+  // **** record is added, as well as helper functions for        ****
+  // **** the lack, in MongoDB, of case-independent searches.     ****
+  // ****                                                         ****
+  // **** For lack of  case-insensitive search, the layer creates ****
+  // **** __uc__ fields that are uppercase equivalent of 'string' ****
+  // **** fields in the schema.                                   ****
+  // ****                                                         ****
+  // **** About joins, if you have people and each person can have****
+  // **** several email addresses, when adding an email address   ****
+  // **** the "parent" record will have the corresponding         ****
+  // **** array in _children updated with the new email address   ****
+  // **** added. This means that when fetching records, you       ****
+  // **** _automatically_ and _immediately_ have its children     ****
+  // **** loaded. It also means that it's possible, in MongoDb,   ****
+  // **** to search for fields in the direct children             ****
+  // **** I took great care at moving these functions here        ****
+  // **** because these are the functions that developers of      ****
+  // **** other layer drivers will never have to worry about      ****
+  // ****                                                         ****
+  // *****************************************************************
+  // *****************************************************************
+
+
+  _addUcFields: function( record ){
+    var self = this;
+
+    for( var k in record ){
+      if( self._searchableHash[ k ] === 'upperCase' ){
+        record[ '__uc__' + k ] = record[ k ].toUpperCase();
+      }
+    }
+  },
+
+  // If there are ".", then some children records are being referenced.
+  // The actual way they are placed in the record is in _children; so,
+  // add _children where needed.
+  _makeMongoFieldPath: function( s ){
+
+    if( s.match(/\./ ) ){
+
+      var l = s.split( /\./ );
+      for( var i = 0; i < l.length-1; i++ ){
+        l[ i ] = '_children.' + l[ i ];
+      }
+      return l.join( '.' );
+
+    } else {
+      return s;
+    }
+   
+  },
+
+  _addUcPrefixToPath: function( s ){
+    var a = s.split('.');
+    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
+    return a.join('.');
+  },
+
+
+
+  _makeRecordWithLookups: function( record, cb ){
+
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY:  _makeRecordWithLookups for ", self.table, 'record:',  record );
+
+    var recordWithLookups = {};
+
+    // Prepare recordWithLookups, as a copy of record
+    for( var k in record ){
+      recordWithLookups[ k ] = record[ k ];
+    }
+
+    // Each added record needs to be ready for its _children
+    recordWithLookups._children = {};
+
+    // Prepare the ground: for each child table of type "multiple", add an
+    // empty value in recordWithLookups.[children & searchData] as an empty
+    // array. Future updates and inserts might add/delete/update records in there
+    Object.keys( self.childrenTablesHash ).forEach( function( k ){
+      if( self.childrenTablesHash[ k ].nestedParams.type === 'multiple' ){
+        recordWithLookups._children[ k ] = [];
+      } 
+    });
+
+    // Cycle through each lookup child of the current record,
+    async.eachSeries(
+      Object.keys( recordWithLookups ),
+
+      function( recordKey, cb ){
+      
+        //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
+        if( ! self.lookupChildrenTablesHash[ recordKey ] ){
+          //consolelog( rnd, "It isn't! Ignoring it...");
+          return cb( null );
+        } else {
+          consolelog( rnd, "It is! Processing it...");
+          consolelog( rnd, recordKey, "Is a lookup table!");
+
+          var childTableData = self.lookupChildrenTablesHash[ recordKey ];
+
+          var childLayer = childTableData.layer;
+          var nestedParams = childTableData.nestedParams;
+
+          consolelog( rnd, "Working on ", childTableData.layer.table );
+          consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
+
+          // EXCEPTION: check if the record being looked up isn't the same as the one
+          // being added. This is an edge case, but it's nice to cover it
+          if( childLayer.table === self.table && recordWithLookups[ self.idProperty ] === recordWithLookups[ recordKey ] ){
+
+            // Make up a temporary copy of the record, to which _children and __uc__ fields
+            // will be added
+            var t = {};
+            for( var k in record ) t[ k ] = record[ k ];
+            childLayer._addUcFields( t );
+            t._children = {};
+            recordWithLookups._children[ recordKey ] = t;
+        
+            return cb( null );
+          }
+
+          // Get children data for that child table
+          // ROOT to _getChildrenData
+          self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
+            if( err ) return cb( err );
+
+            childLayer._addUcFields( childData );
+            childData._children = {};
+
+            consolelog( rnd, "The childData data is:", childData );
+
+             // Make the record uppercase since it's for a search
+            recordWithLookups._children[ recordKey ] = childData;
+
+            // That's it!
+            cb( null );
+          });
+
+        }
+      },
+
+      // End of cycle: function can continue
+
+      function( err ){
+        if( err ) return cb( err );
+
+        consolelog( rnd, "About to insert. At this point, recordWithLookups is:", recordWithLookups );
+
+        cb( null, recordWithLookups );
+      }
+    );
+  },
+
+  _makeUpdateObjectWithLookups: function( updateObject, cb ){
+    var self = this;
+
+    var rnd = Math.floor(Math.random()*100 );
+    consolelog( "\n");
+    consolelog( rnd, "ENTRY:  _makeUpdateObjectWithLookups for ", self.table, 'updateObject:',  updateObject );
+
+    // Make a copy of the original updateObject. The copy will be
+    // enriched and will then be returned
+    var updateObjectWithLookups = {};
+    for( var k in updateObject ) updateObjectWithLookups[ k ] = updateObject[ k ];
+
+    // This is only for aesthetic purposes. In an update, the update object
+    // "is" the record (although it might be a partial version of it)
+    var record = updateObject;
+
+    // Cycle through each lookup child of the update object
+    async.eachSeries(
+      Object.keys( record ),
+
+      function( recordKey, cb ){
+      
+        //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
+        if( ! self.lookupChildrenTablesHash[ recordKey ] ){
+          //consolelog( rnd, "It isn't! Ignoring it...");
+          return cb( null );
+        } else {
+          consolelog( rnd, recordKey, "Is a lookup table!");
+
+          var childTableData = self.lookupChildrenTablesHash[ recordKey ];
+
+          var childLayer = childTableData.layer;
+          var nestedParams = childTableData.nestedParams;
+
+          consolelog( rnd, "Working on ", childTableData.layer.table );
+          consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", record );
+
+          // Get children data for that child table
+          // ROOT to _getChildrenData
+          self._getChildrenData( record, recordKey, function( err, childData){
+            if( err ) return cb( err );
+
+            childLayer._addUcFields( childData );
+            childData._children = {};
+
+            consolelog( rnd, "The childData data is:", childData );
+
+            updateObjectWithLookups[ '_children.' + recordKey ] = childData;
+
+            // That's it!
+            cb( null );
+          });
+
+        }
+      },
+
+      // End of cycle: function can continue
+
+      function( err ){
+        if( err ) return cb( err );
+
+        cb( null, updateObjectWithLookups );
+      }
+    );
+
+  },
+
+
   /* This function takes a layer, a record and a child table, and
      returns children data about that field.
      The return value might be an array (for 1:n relationships) or a
@@ -259,7 +1142,7 @@ var MongoMixin = declare( null, {
     // Little detail forgotten by accident
     var resultObject;
 
-    var childTableData = layer.childrenTablesHash[ field ]; 
+    var childTableData = self.childrenTablesHash[ field ]; 
 
     // If it's a lookup, it will be v directly. This will cover cases where a new call
     // is made straight on the lookup
@@ -366,11 +1249,11 @@ var MongoMixin = declare( null, {
     consolelog( rnd, 'Params:' );
     consolelog( require('util').inspect( params, { depth: 10 } ) );
 
-    consolelog( rnd, "Cycling through: ", layer.parentTablesArray );
+    consolelog( rnd, "Cycling through: ", self.parentTablesArray );
 
     // Cycle through each parent of the current layer
     async.eachSeries(
-      layer.parentTablesArray,
+      self.parentTablesArray,
       function( parentTableData, cb ){
     
         consolelog( rnd, "Working on ", parentTableData.layer.table );
@@ -390,7 +1273,7 @@ var MongoMixin = declare( null, {
         // - For lookups, it will be the parentField value in nestedParams
         var field;
         switch( nestedParams.type ){
-          case 'multiple': field = layer.table; break;
+          case 'multiple': field = self.table; break;
           case 'lookup'  : field = nestedParams.parentField; break;
           default        : return cb( new Error("The options parameter must be a non-null object") ); break;
         }
@@ -640,838 +1523,6 @@ var MongoMixin = declare( null, {
       }
     );
 
-  },
-
- 
-  select: function( filters, options, cb ){
-
-    var self = this;
-    var saneRanges;
-
-    // Usual drill
-    if( typeof( cb ) === 'undefined' ){
-      cb = options;
-      options = {}
-    } else if( typeof( options ) !== 'object' || options === null ){
-      return cb( new Error("The options parameter must be a non-null object") );
-    }
-
-    // Make up parameters from the passed filters
-    try {
-      var mongoParameters = this._makeMongoParameters( filters );
-    } catch( e ){
-      return cb( e );
-    }
-
-    // If sortHash is empty, AND there is a self.positionField, then sort
-    // by the element's position
-    if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
-      mongoParameters.sortHash[ self.positionField ] = 1;
-    }
-
-    //console.log("CHECK THIS:");
-    //console.log( require('util').inspect( mongoParameters, { depth: 10 } ) );
-
-    // Actually run the query 
-    var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
-    //consolelog("FIND IN SELECT: ",  mongoParameters.querySelector, self._projectionHash );
-
-    // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
-    // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
-    saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
-
-    // Skipping/limiting according to ranges/limits
-    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
-    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
-
-    // Sort the query
-    cursor.sort( mongoParameters.sortHash , function( err ){
-      if( err ){
-        next( err );
-      } else {
-
-        if( options.useCursor ){
-
-          cursor.count( function( err, grandTotal ){
-            if( err ){
-              cb( err );
-            } else {
-
-              cursor.count( { applySkipLimit: true }, function( err, total ){
-                if( err ){
-                  cb( err );
-                } else {
-
-                  cb( null, {
-      
-                    next: function( done ){
-      
-                      cursor.nextObject( function( err, obj) {
-                        if( err ){
-                          done( err );
-                        } else {
-      
-                          // If options.delete is on, then remove a field straight after fetching it
-                          if( options.delete && obj !== null ){
-                            self.collection.remove( { _id: obj._id }, function( err, howMany ){
-                              if( err ){
-                                done( err );
-                              } else {
-
-                                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
-
-                                self.schema.validate( obj, function( err, obj, errors ){
-
-                                  // If there is an error, end of story
-                                  // If validation fails, call callback with self.SchemaError
-                                  if( err ) return cb( err );
-                                  //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-                                  done( null, obj );
-                                });
-                              }
-                            });
-                          } else {
-
-                            if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
-
-                            if( obj === null ) return done( null, obj );
-
-                            self.schema.validate( obj, function( err, obj, errors ){
-
-                              // If there is an error, end of story
-                              // If validation fails, call callback with self.SchemaError
-                              if( err ) return cb( err );
-                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-                              done( null, obj );
-                            });
-                              
-                          }
-                        }
-                      });
-                    },
-      
-                    rewind: function( done ){
-                      if( options.delete ){
-                        done( new Error("Cannot rewind a cursor with `delete` option on") );
-                      } else {
-                        cursor.rewind();
-                        done( null );
-                      }
-                    },
-                    close: function( done ){
-                      cursor.close( done );
-                    }
-                  }, total, grandTotal );
-
-                }
-              });
-
-            }
-          });
-
-        } else {
-
-          cursor.toArray( function( err, queryDocs ){
-            if( err ){
-             cb( err );
-            } else {
-
-              cursor.count( function( err, grandTotal ){
-                if( err ){
-                  cb( err );
-                } else {
-
-                  cursor.count( { applySkipLimit: true }, function( err, total ){
-                    if( err ){
-                      cb( err );
-                    } else {
-
-                      // Cycle to work out the toDelete array _and_ get rid of the _id_
-                      // from the resultset
-                      var toDelete = [];
-                      queryDocs.forEach( function( doc ){
-                        if( options.delete ) toDelete.push( doc._id );
-                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-                      });
-
-                      // If it was a delete, delete each record
-                      // Note that there is no check whether the delete worked or not
-                      if( options.delete ){
-                        toDelete.forEach( function( _id ){
-                          self.collection.remove( { _id: _id }, function( err ){ } );
-                        });
-                      }
-
-                      var changeFunctions = [];
-                      // Validate each doc, running a validate function for each one of them in parallel
-                      queryDocs.forEach( function( doc, index ){
-
-                        changeFunctions.push( function( callback ){
-                          self.schema.validate( doc, function( err, validatedDoc, errors ){
-                            if( err ){
-                              callback( err );
-                            } else {
-
-                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-                              queryDocs[ index ] = validatedDoc;
-                               
-                              callback( null );
-                            }
-                          });
-                        });
-                      }); 
-                      async.parallel( changeFunctions, function( err ){
-                        if( err ) return cb( err );
-
-                        // That's all!
-                        cb( null, queryDocs, total, grandTotal );
-                      });
-
-                    };
-                  });
-
-                };
-              });
-
-            };
-          })
-
-        }
-      }
-    });
-       
-  },
-
-  update: function( filters, record, options, cb ){
-
-    var self = this;
-    var layer = this;
-    var recordCleanedUp = {};
-
-    var updateObject = {};
-    var unsetObject = {};
-
-    var rnd = Math.floor(Math.random()*100 );
-    consolelog( "\n");
-    consolelog( rnd, "ENTRY: update for ", layer.table, ' => ', record, "options:", options );
-
-    // Validate the record against the schema
-    // NOTE: Since it's an update, `onlyObjectValues` is set to true
-    self.schema.validate( record, { onlyObjectValues: true }, function( err, record, errors ){
-
-      // If there is an error, end of story
-      // If validation fails, call callback with self.SchemaError
-      if( err ) return cb( err );
-
-      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-      // Usual drill
-      if( typeof( cb ) === 'undefined' ){
-        cb = options;
-        options = {}
-      } else if( typeof( options ) !== 'object' || options === null ){
-        return cb( new Error("The options parameter must be a non-null object") );
-      }
-
-      // Make up recordCleanedUp, containing only allowed fields.
-      // ALSO, creating updateObject which includes the '_searchData' update for local cache
-      for( var k in record ){
-        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ){
-          recordCleanedUp[ k ] = record[ k ];
-
-          updateObject[ k ] = record[ k ];
-        }
-      }
-
-      self._addUcFields( updateObject );
-
-      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
-      // so that partial PUTs will "overwrite" whole objects rather than
-      // just overwriting fields that are _actually_ present in `body`
-      if( options.deleteUnsetFields ){
-        Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
-             unsetObject[ i ] = 1;
-           }
-        });
-      }
-
-
-      // ****************************************************************
-      // *********** MongoDB-SPECIFIC JOIN STUFF STARTS HERE ************
-      // ****************************************************************
-
-      // Mirrors what happens with the "normal" fields for the MongoDb-specific __uc__ ones
-      // This is in a different section because I want to group ALL of the
-      // MongoDb-specific join/children stuff in one section of the code
-      if( options.deleteUnsetFields ){
-        Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' ){
-
-             // Get rid of __uc__ objects if the equivalent field was out
-             if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
-               unsetObject[ '__uc__' + i ] = 1;
-             }
-           }
-        });
-      }
-
-
-
-      // Create the update object specific for the parents update, without _children
-      // (At least for now, children records do not expand _children in any way)
-      var updateObjectForParentsUpdate = {};
-      for( var k in updateObject ) updateObjectForParentsUpdate[ k ] = updateObject[ k ];
-      var unsetObjectForParentsUpdate = {};
-      for( var k in unsetObject ) unsetObjectForParentsUpdate[ k ] = unsetObject[ k ];
-
-      // Cycle through each lookup child of the current record,
-      // and -- if so required by `searchable` or `autoLoad` --
-      // changes the updateObject accordingly
-      async.eachSeries(
-        Object.keys( recordCleanedUp ),
-
-        function( recordKey, cb ){
-      
-          //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
-          if( ! layer.lookupChildrenTablesHash[ recordKey ] ){
-            //consolelog( rnd, "It isn't! Ignoring it...");
-            return cb( null );
-          } else {
-            consolelog( rnd, recordKey, "Is a lookup table!");
-
-            var childTableData = layer.lookupChildrenTablesHash[ recordKey ];
-
-            var childLayer = childTableData.layer;
-            var nestedParams = childTableData.nestedParams;
-
-            consolelog( rnd, "Working on ", childTableData.layer.table );
-            consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordCleanedUp );
-
-            // Get children data for that child table
-            // ROOT to _getChildrenData
-            layer._getChildrenData( recordCleanedUp, recordKey, function( err, childData){
-              if( err ) return cb( err );
-
-              childLayer._addUcFields( childData );
-              childData._children = {};
-
-              consolelog( rnd, "The childData data is:", childData );
-
-              updateObject[ '_children.' + recordKey ] = childData;
-
-              // That's it!
-              cb( null );
-            });
-
-          }
-        },
-
-        // End of cycle: function can continue
-
-        function( err ){
-          if( err ) return cb( err );
-
-          // ****************************************************************
-          // *********** MongoDB-SPECIFIC JOIN STUFF ENDS   HERE ************
-          // ****************************************************************
-
-          // Make up parameters from the passed filters
-          try {
-            var mongoParameters = self._makeMongoParameters( filters );
-          } catch( e ){
-            return cb( e );
-          }
-
-          consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
-          consolelog( rnd, "Selector:", mongoParameters.querySelector );
-
-          // If options.multi is off, then use findAndModify which will accept sort
-          if( !options.multi ){
-            self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObject, $unset: unsetObject }, function( err, doc ){
-              if( err ) return cb( err );
-
-              if( doc ){
-
-                // Change parents so that the one record is updated
-                self._updateParentsRecords( { op: 'updateOne', id: doc[ self.idProperty ], updateObject: updateObjectForParentsUpdate, unsetObject: unsetObjectForParentsUpdate }, function( err ){
-                  if( err ) return cb( err );
-
-                  cb( null, 1 );
-                });
-              } else {
-                cb( null, 0 );
-              }
-            });
-
-            // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "update"
-          } else {
-            // Run the query
-            self.collection.update( mongoParameters.querySelector, { $set: updateObject, $unset: unsetObject }, { multi: true }, function( err, total ){
-              if( err ) return cb( err );
-
-              // Change parents so that the multiple update is run ther too
-              self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObjectForParentsUpdate, unsetObject: unsetObjectForParentsUpdate }, function( err ){
-                if( err ) return cb( err );
-
-                cb( null, total );
-              });
-            })
-
-
-          };
-          consolelog( rnd, "EXIT: End of function." );
-        }
-      );
-    });
-
-  },
-
-  _addUcFields: function( record ){
-    var self = this;
-
-    for( var k in record ){
-      if( self._searchableHash[ k ] === 'upperCase' ){
-        record[ '__uc__' + k ] = record[ k ].toUpperCase();
-      }
-    }
-  },
-
-  insert: function( record, options, cb ){
-
-    var self = this;
-    var layer = this;
-    var recordCleanedUp = {};
-    var recordToBeWritten = {};
-
-
-    var rnd = Math.floor(Math.random()*100 );
-    consolelog( "\n");
-    consolelog( rnd, "ENTRY: insert for ", layer.table, ' => ', record );
-
-    // Usual drill
-    if( typeof( cb ) === 'undefined' ){
-      cb = options;
-      options = {}
-    } else if( typeof( options ) !== 'object' || options === null ){
-      return cb( new Error("The options parameter must be a non-null object") );
-    }
-
-    // Validate the record against the schema
-    self.schema.validate( record, function( err, record, errors ){
-
-      // If there is an error, end of story
-      // If validation fails, call callback with self.SchemaError
-      if( err ) return cb( err );
-      if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-
-      // Copy record over, only for existing fields
-      for( var k in record ){
-        if( typeof( self._fieldsHash[ k ] ) !== 'undefined' ) recordCleanedUp[ k ] = record[ k ];
-      }
-
-      consolelog( rnd, "recordCleanedUp is:", recordCleanedUp );
-
-      // ****************************************************************
-      // *********** MongoDB-SPECIFIC JOIN STUFF STARTS HERE ************
-      // ****************************************************************
-
-      // Prepare recordToBeWritten
-      for( var k in recordCleanedUp ){
-        recordToBeWritten[ k ] = recordCleanedUp[ k ];
-      }
-
-      // Every record in Mongo MUST have an _id field
-      if( typeof( recordToBeWritten._id ) === 'undefined' ) recordToBeWritten._id  = ObjectId();
-
-      // Add __uc__ fields to the record
-      self._addUcFields( recordToBeWritten );
-
-      // Each added record needs to be ready for its _children
-      recordToBeWritten._children = {};
-
-      // Prepare the ground: for each child table of type "multiple", add an
-      // empty value in recordToBeWritten.[children & searchData] as an empty
-      // array. Future updates and inserts might add/delete/update records in there
-      Object.keys( layer.childrenTablesHash ).forEach( function( k ){
-        if( layer.childrenTablesHash[ k ].nestedParams.type === 'multiple' ){
-          recordToBeWritten._children[ k ] = [];
-        } 
-      });
-
-      // Cycle through each lookup child of the current record,
-      // and -- if so required by `searchable` or `autoLoad` --
-      // changes the record accordingly
-      async.eachSeries(
-        Object.keys( recordToBeWritten ),
-
-        function( recordKey, cb ){
-      
-          //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
-          if( ! layer.lookupChildrenTablesHash[ recordKey ] ){
-            //consolelog( rnd, "It isn't! Ignoring it...");
-            return cb( null );
-          } else {
-            consolelog( rnd, "It is! Processing it...");
-            consolelog( rnd, recordKey, "Is a lookup table!");
-
-            var childTableData = layer.lookupChildrenTablesHash[ recordKey ];
-
-            var childLayer = childTableData.layer;
-            var nestedParams = childTableData.nestedParams;
-
-            consolelog( rnd, "Working on ", childTableData.layer.table );
-            consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordToBeWritten );
-
-            // EXCEPTION: check if the record being looked up isn't the same as the one
-            // being added. This is an edge case, but it's nice to cover it
-            if( childLayer.table === self.table && recordToBeWritten[ self.idProperty ] === recordToBeWritten[ recordKey ] ){
-
-              childLayer._addUcFields( recordCleanedUp );
-              recordCleanedUp._children = {};
-              recordToBeWritten._children[ recordKey ] = recordCleanedUp;
-        
-              return cb( null );
-            }
-
-            // Get children data for that child table
-            // ROOT to _getChildrenData
-            layer._getChildrenData( recordToBeWritten, recordKey, function( err, childData){
-              if( err ) return cb( err );
-
-              childLayer._addUcFields( childData );
-              childData._children = {};
-
-              consolelog( rnd, "The childData data is:", childData );
-
-              // Make the record uppercase since it's for a search
-              recordToBeWritten._children[ recordKey ] = childData;
-
-              // That's it!
-              cb( null );
-            });
-
-          }
-        },
-
-        // End of cycle: function can continue
-
-        function( err ){
-          if( err ) return cb( err );
-
-          consolelog( rnd, "About to insert. At this point, recordToBeWritten is:", recordToBeWritten );
-
-          // ****************************************************************
-          // *********** MongoDB-SPECIFIC JOIN STUFF ENDS   HERE ************
-          // ****************************************************************
-
-          // Actually run the insert
-          self.collection.insert( recordToBeWritten, function( err ){
-            if( err ) return cb( err );
-
-            self.position( recordToBeWritten, options.beforeId ? options.beforeId : null, function( err ){
-              if( err ) return cb( err );
-
-              self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
-                if( err ) return cb( err );
-
-                if( ! options.returnRecord ) return cb( null );
-
-                self.collection.findOne( { _id: recordToBeWritten._id }, self._projectionHash, function( err, doc ){
-                  if( err ) return cb( err );
-
-                  if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-
-                  cb( null, doc );
-                });
-              });
-            });
-          });
-        }
-      );
-    });
-  },
-
-
-  'delete': function( filters, options, cb ){
-
-    var self = this;
-
-    // Usual drill
-    if( typeof( cb ) === 'undefined' ){
-      cb = options;
-      options = {}
-    } else if( typeof( options ) !== 'object' || options === null ){
-      return cb( new Error("The options parameter must be a non-null object") );
-    }
-
-    // Run the query
-    try { 
-      var mongoParameters = this._makeMongoParameters( filters );
-    } catch( e ){
-      return cb( e );
-    }
-
-    // If options.multi is off, then use findAndModify which will accept sort
-    if( !options.multi ){
-      self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
-        if( err ) return cb( err );
-
-        if( doc ){
-
-          self._updateParentsRecords( { op: 'deleteOne', id: doc[ self.idProperty ] }, function( err ){
-            if( err ) return cb( err );
-
-            cb( null, 1 );
-          });
-
-        } else {
-          cb( null, 0 );
-        }
-      });
-
-    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
-    } else {
-      self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
- 
-        self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
-          if( err ) return cb( err );
-         
-          cb( null, total );
-        });
- 
-      });
-    }
-
-  },
-
-  position: function( record, moveBeforeId, cb ){
-
-    function moveElement(array, from, to) {
-      if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
-    }
-
-    var self = this;
-
-    var positionField = self.positionField;
-    var idProperty = self.idProperty;
-    var conditionsHash = {};
-    var id = record[ idProperty ];
-
-    var updateCalls = [];
-
-
-    consolelog("REPOSITIONING RUN");
-
-    // No position field: nothing to do
-    if( !positionField ){
-       consolelog("No positionField for this table, not repositioning... ");
-       return cb( null );
-    }
-    consolelog("YES POSITION FIELD");
-    
-
-    // Make up conditionsHash based on the positionBase array
-    var conditionsHash = { and: [] };
-    for( var i = 0, l = self.positionBase.length -1; i < l; i ++ ){
-      var positionBaseField = self.positionBase[ i ];
-      conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
-    }
-
-    consolelog("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
-
-    // Run the select, ordered by the positionField and satisfying the positionBase
-    var sortParams = { };
-    sortParams[ positionField ] = 1;
-    self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
-      if( err ) return cb( err );
-
-      consolelog("DATA BEFORE: ", data );
-      
-      // Working out `from` and `to` as positional numbers
-      var from, to;
-      data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
-      consolelog("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
-      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
-        to = data.length;
-        consolelog( "LENGTH OF DATA: " , data.length );
-      } else {
-        consolelog("MOVE BEFORE ID WAS PASSED, LOOKING FOR ITEM BY HAND...");
-        data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
-      }
-
-      //consolelog("from: ", from, ", to: ", to );
-
-      // Actually move the elements
-      if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
-        consolelog("SWAPPINGGGGGGGGGGGGGG...");
-
-        if( to > from ) to --;
-        moveElement( data, from, to);
-
-        consolelog("DATA AFTER: ", data );
-
-        // Actually change the values on the DB so that they have the right order
-        var updateCalls = [];
-        data.forEach( function( item, i ){
-
-          console.log("Item: ", item, i );
-          var updateTo = {};
-          updateTo[ positionField ] = i + 100;
-
-          updateCalls.push( function( cb ){
-            var mongoSelector = {};
-            mongoSelector[ idProperty ] = item[ idProperty ];
-            consolelog("UPDATING...", mongoSelector, { $set: updateTo } );
-            self.collection.update( mongoSelector, { $set: updateTo }, cb );
-          });
-
-        });
-        
-        // Runs the updates in series, calling the final callback at the end
-        async.series( updateCalls , cb );
-        // cb( null );
-
-      } else {
-
-        // Something went wrong, no changes will be made
-        cb( null );
-      }
-
-    });     
-    
-
-  },
-
-  makeIndex: function( keys, name, options, cb ){
-    //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
-    var opt = {};
-
-    consolelog("Making indexes for table", this.table, "and keys:");
-    consolelog( keys );
-
-    if( typeof( options ) === 'undefined' || options === null ) options = {};
-    opt.background = !!options.background;
-    opt.unique = !!options.unique;
-    if( typeof( name ) === 'string' )  opt.name = name;
-
-    this.collection.ensureIndex( keys, opt, function( err ){
-      if( err ) return cb( err );
-
-      cb( null );
-    });
-  },
-
-  // Make all indexes based on the schema
-  // Options can have:
-  //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
-
-  makeAllIndexes: function( options, cb ){
-
-    var self = this;
-    var indexMakers = [];
-    var autoNumber = 0;
-
-    var opt = {};
-    if( options.background ) opt.background = true;
-
-    console.log("SEARCHABLE AND INDEXES:");
-    console.log(self._searchableHash );
-    console.log(self._permutationGroups );
-
-    // Add permutations to indexes
-    Object.keys( self._permutationGroups ).forEach( function( f ){
-
-      var permutationEntry = self._permutationGroups[ f ];
-
-      var prefixes = [];
-      var fields = [];
-      
-      Object.keys( permutationEntry.prefixes ).forEach( function( prefix ){
-        var entryValue = permutationEntry.prefixes[ prefix ];
-        prefix = self._makeMongoFieldPath( prefix );
-        
-        if( entryValue === 'upperCase' ){
-          prefix = self._addUcPrefixToPath( prefix );
-        }
-        prefixes.push( prefix );
-      });
-
-      Object.keys( permutationEntry.fields ).forEach( function( field ){
-        var entryValue = permutationEntry.fields[ field ];
-        field = self._makeMongoFieldPath( field );
-        
-        if( entryValue === 'upperCase' ){
-          field = self._addUcPrefixToPath( field );
-        }
-        fields.push( field );
-      });
-
-      console.log( "RESULT FOR", f );
-      console.log( prefixes );
-      console.log( fields );
-
-      console.log( "KEYS:" );
-      self._permute( fields ).forEach( function( combination ){
-        var keys = {};
-
-        for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
-        for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
-        
-        console.log( keys );
-
-        // Adds this index maker to the list
-        indexMakers.push( function( cb ){
-          self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
-          autoNumber ++;
-        });
-
-      });
-    });
-
-    // Add individual searchable fields to indexes
-    Object.keys( self._searchableHash ).forEach( function( field ){
-      var keys = {};
-
-      var entryValue = self._searchableHash[ field ];
-
-      field = self._makeMongoFieldPath( field );
-        
-      if( entryValue === 'upperCase' ){
-        field = self._addUcPrefixToPath( field );
-      }
-
-      keys[ field ] = 1;
-          
-      // Adds this index maker to the list
-      indexMakers.push( function( cb ){
-        self.makeIndex( keys, null, opt, cb );
-      });
-
-      console.log("SINGLE KEYS FOR", self.table );
-      console.log( keys );
-    });
-
-
-    // TODO: CHECK http://stackoverflow.com/questions/22291038/clarification-on-sorting-subsets-in-mongodb
-    // Adds the positionField
-    //if( self.positionfield ){
-    //  indexMakers.push( function( cb ){
-    //    self.makeIndex( keys, null, opt, cb );
-    //  });
-    //}
-
-    // All done: now _actually_ create the indexes
-    // (indexMarkers is an array of callbacks, each one creating one index)
-    async.series( indexMakers, cb );
-  },
-
-
-  dropAllIndexes: function( done ){
-    this.collection.dropAllIndexes( done );
   },
 
 });
