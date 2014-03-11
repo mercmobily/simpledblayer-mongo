@@ -235,8 +235,8 @@ var MongoMixin = declare( null, {
       mongoParameters.sortHash[ self.positionField ] = 1;
     }
 
-    //console.log("CHECK THIS:");
-    //console.log( require('util').inspect( mongoParameters, { depth: 10 } ) );
+    //consolelog("CHECK THIS:");
+    //consolelog( require('util').inspect( mongoParameters, { depth: 10 } ) );
 
     // Actually run the query 
     var cursor = self.collection.find( mongoParameters.querySelector, self._projectionHash );
@@ -729,7 +729,7 @@ var MongoMixin = declare( null, {
         var updateCalls = [];
         data.forEach( function( item, i ){
 
-          //console.log("Item: ", item, i );
+          //consolelog("Item: ", item, i );
           var updateTo = {};
           updateTo[ positionField ] = i + 100;
 
@@ -789,9 +789,9 @@ var MongoMixin = declare( null, {
     var opt = {};
     if( options.background ) opt.background = true;
 
-    console.log("SEARCHABLE AND INDEXES:");
-    console.log(self._searchableHash );
-    console.log(self._permutationGroups );
+    consolelog("SEARCHABLE AND INDEXES:");
+    consolelog(self._searchableHash );
+    consolelog(self._permutationGroups );
 
     // Add permutations to indexes
     Object.keys( self._permutationGroups ).forEach( function( f ){
@@ -821,18 +821,18 @@ var MongoMixin = declare( null, {
         fields.push( field );
       });
 
-      console.log( "RESULT FOR", f );
-      console.log( prefixes );
-      console.log( fields );
+      consolelog( "RESULT FOR", f );
+      consolelog( prefixes );
+      consolelog( fields );
 
-      console.log( "KEYS:" );
+      consolelog( "KEYS:" );
       self._permute( fields ).forEach( function( combination ){
         var keys = {};
 
         for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
         for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
         
-        console.log( keys );
+        consolelog( keys );
 
         // Adds this index maker to the list
         indexMakers.push( function( cb ){
@@ -862,8 +862,8 @@ var MongoMixin = declare( null, {
         self.makeIndex( keys, null, opt, cb );
       });
 
-      console.log("SINGLE KEYS FOR", self.table );
-      console.log( keys );
+      consolelog("SINGLE KEYS FOR", self.table );
+      consolelog( keys );
     });
 
 
@@ -1277,7 +1277,7 @@ var MongoMixin = declare( null, {
           case 'lookup'  : field = nestedParams.parentField; break;
           default        : return cb( new Error("The options parameter must be a non-null object") ); break;
         }
-        console.log( rnd, "field for ", nestedParams.type, "is:", field );
+        consolelog( rnd, "field for ", nestedParams.type, "is:", field );
 
         /* THREE CASES:
           * CASE #1: Insert
