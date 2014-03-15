@@ -57,7 +57,7 @@ var tests = simpledblayerTests.get(
 
       "mongo prep": function( test ){
 
-        g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema, idProperty: 'id' } );
+        g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema, idProperty: 'name' } );
         test.ok( g.mongoPeople );
         test.done();
       },
