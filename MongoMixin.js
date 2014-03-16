@@ -152,7 +152,7 @@ var MongoMixin = declare( null, {
               throw( new Error("Field type unknown: " + fieldObject.type ) );
             break;
           }
-         
+        
           // Finally, push down the item!
           selector[ mongoOperand ].push( item );
         });
@@ -466,13 +466,23 @@ var MongoMixin = declare( null, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
+
+    // You cannot do a multiple update when options.deleteUnsetFields is set, as _every_
+    // required field needs to be specified -- and the idProperty is obviously required
+    // deleteUnsetFields is there so that a "document.save()"-style called can be performed
+    // easily.
+    if( options.multi && options.deleteUnsetFields ){
+      return cb( new Error("THe options multi and deleteUnsetFields are mutually exclusive -- one or the other") );
+    }
+
     // Validate the record against the schema
-    // NOTE: Since it's an update, `onlyObjectValues` is set to true
 
-    // FIXME/TODO: This is wrong!!! This way, an update can effectively delete *required* fields
-    // if deleteUnsetFields is true and the required fields are not set!!!
+    // If deleteUnsetFields is set, then the validation will apply to _every_ field in the schema.
+    // Otherwise, just to the passed fields is fine
+    var onlyObjectValues = options.deleteUnsetFields ? false : true;
 
-    self.schema.validate( updateObject, { onlyObjectValues: true }, function( err, updateObject, errors ){
+    // Validate what was passed...
+    self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues }, function( err, updateObject, errors ){
 
       // If there is an error, end of story
       // If validation fails, call callback with self.SchemaError
@@ -483,12 +493,6 @@ var MongoMixin = declare( null, {
         schemaError.errors = errors;
         return cb( schemaError );
       } 
-
-      //for( var k in record ){
-      //  if( typeof( self._fieldsHash[ k ] ) !== 'undefined' && k !== '_id' ){
-      //    updateObject[ k ] = record[ k ];
-      //  }
-      //}
 
       // The _id field cannot be updated. If it's there,
       // simply delete it
@@ -557,7 +561,7 @@ var MongoMixin = declare( null, {
           self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObject }, { multi: true }, function( err, total ){
             if( err ) return cb( err );
 
-            // MONGO: Change parents so that the one record is updated
+            // MONGO: Change parents
             self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
               if( err ) return cb( err );
 
@@ -816,6 +820,8 @@ var MongoMixin = declare( null, {
 
     consolelog("Making indexes for table", this.table, "and keys:");
     consolelog( keys );
+    consolelog("And options:");
+    consolelog( options );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
@@ -884,22 +890,20 @@ var MongoMixin = declare( null, {
       consolelog( "KEYS:" );
       self._permute( fields ).forEach( function( combination ){
 
-        //(function(){
 
-          var keys = {};
+        var keys = {};
 
-          for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
-          for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
+        for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
+        for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
         
-          consolelog( keys );
+        consolelog( keys );
 
-          // Adds this index maker to the list
-          indexMakers.push( function( cb ){
-            console.log("Running makeIndex with keys:", keys );
-            self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
-            autoNumber ++;
-          });
-        //})();
+        // Adds this index maker to the list
+        indexMakers.push( function( cb ){
+          console.log("Running makeIndex with keys:", keys );
+          self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
+          autoNumber ++;
+        });
 
       });
     });
@@ -910,6 +914,7 @@ var MongoMixin = declare( null, {
 
       var entryValue = self._searchableHash[ field ];
 
+      var originalField = field;
       field = self._makeMongoFieldPath( field );
         
       if( entryValue === 'upperCase' ){
@@ -918,10 +923,26 @@ var MongoMixin = declare( null, {
 
       keys[ field ] = 1;
           
-      // Adds this index maker to the list
-      indexMakers.push( function( cb ){
-        self.makeIndex( keys, null, opt, cb );
-      });
+      // If it's the idProperty field, then make it unique
+      if( originalField === self.idProperty ){
+
+        indexMakers.push( function( cb ){
+          consolelog("FIELD", field, "IS idParam, making it unique!");
+          var opt2 = {};
+          opt2.background = !!opt.background;
+          opt2.unique = true;
+          self.makeIndex( keys, null, opt2, cb );
+        });
+
+      // Just a normal index
+      } else {
+
+        indexMakers.push( function( cb ){
+          consolelog("FIELD", field, "is a normal index");
+          self.makeIndex( keys, null, opt, cb );
+        });
+
+      }
 
       consolelog("SINGLE KEYS FOR", self.table );
       consolelog( keys );
@@ -950,34 +971,34 @@ var MongoMixin = declare( null, {
 
 
 
-  // *****************************************************************
-  // *****************************************************************
-  // ****              MONGO-SPECIFIC FUNCTIONS                   ****
-  // ****              FOR JOINS AND UPPERCASING                  ****
-  // ****                                                         ****
-  // **** These functions are here to address mongoDb's lack of   ****
-  // **** joins by manipulating records' contents when a parent   ****
-  // **** record is added, as well as helper functions for        ****
-  // **** the lack, in MongoDB, of case-independent searches.     ****
-  // ****                                                         ****
-  // **** For lack of  case-insensitive search, the layer creates ****
-  // **** __uc__ fields that are uppercase equivalent of 'string' ****
-  // **** fields in the schema.                                   ****
-  // ****                                                         ****
-  // **** About joins, if you have people and each person can have****
-  // **** several email addresses, when adding an email address   ****
-  // **** the "parent" record will have the corresponding         ****
-  // **** array in _children updated with the new email address   ****
-  // **** added. This means that when fetching records, you       ****
-  // **** _automatically_ and _immediately_ have its children     ****
-  // **** loaded. It also means that it's possible, in MongoDb,   ****
-  // **** to search for fields in the direct children             ****
-  // **** I took great care at moving these functions here        ****
-  // **** because these are the functions that developers of      ****
-  // **** other layer drivers will never have to worry about      ****
-  // ****                                                         ****
-  // *****************************************************************
-  // *****************************************************************
+  // ******************************************************************
+  // ******************************************************************
+  // ****              MONGO-SPECIFIC FUNCTIONS                    ****
+  // ****              FOR JOINS AND UPPERCASING                   ****
+  // ****                                                          ****
+  // **** These functions are here to address mongoDb's lack of    ****
+  // **** joins by manipulating records' contents when a parent    ****
+  // **** record is added, as well as helper functions for         ****
+  // **** the lack, in MongoDB, of case-independent searches.      ****
+  // ****                                                          ****
+  // **** For lack of  case-insensitive search, the layer creates  ****
+  // **** __uc__ fields that are uppercase equivalent of 'string'  ****
+  // **** fields in the schema.                                    ****
+  // ****                                                          ****
+  // **** About joins, if you have people and each person can have ****
+  // **** several email addresses, when adding an email address    ****
+  // **** the "parent" record will have the corresponding          ****
+  // **** array in _children updated with the new email address    ****
+  // **** added. This means that when fetching records, you        ****
+  // **** _automatically_ and _immediately_ have its children      ****
+  // **** loaded. It also means that it's possible, in MongoDb,    ****
+  // **** to search for fields in the direct children              ****
+  // **** I took great care at moving these functions here         ****
+  // **** because these are the functions that developers of       ****
+  // **** other layer drivers will never have to worry about       ****
+  // ****                                                          ****
+  // ******************************************************************
+  // ******************************************************************
 
 
   _deleteUcFieldsfromChildren: function( _children ){
@@ -1469,16 +1490,21 @@ var MongoMixin = declare( null, {
 
             consolelog( rnd, "CASE #2 (updateMany)", params.op );
 
-            //cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is unimplementable") );
+            // Sorry, can't. MongoDb bug #1243
+            if( nestedParams.type === 'multiple' ){
+              cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is unimplementable") );
+            }
 
             // Assign the parameters
             var filters = params.filters;
             var updateObject = params.updateObject;
             var unsetObject = params.unsetObject;
 
+
             // Make up parameters from the passed filters
             try {
               var mongoParameters = parentLayer._makeMongoParameters( filters, field );
+              // var mongoParameters = parentLayer._makeMongoParameters( filters );
             } catch( e ){
               return cb( e );
             }
