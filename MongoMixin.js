@@ -21,7 +21,7 @@ var
 ;
 
 var consolelog = function(){
-  console.log.apply( console, arguments );
+  //console.log.apply( console, arguments );
 }
 
 var MongoMixin = declare( null, {
@@ -188,6 +188,8 @@ var MongoMixin = declare( null, {
     // sorting happens regardless of upper or lower case
     var sortHash = {};
 
+    consolelog( "filters.sort is:", filters.sort );        
+    consolelog( "_sortableHash is:", self._sortableHash );        
     for( var field  in filters.sort ) {
       var sortDirection = filters.sort[ field ]
 
@@ -246,7 +248,7 @@ var MongoMixin = declare( null, {
     }
 
 
-    console.log("PH: ", mongoParameters.querySelector, projectionHash );
+    consolelog("PH: ", mongoParameters.querySelector, projectionHash );
 
     // Actually run the query 
     var cursor = self.collection.find( mongoParameters.querySelector, projectionHash );
@@ -300,7 +302,7 @@ var MongoMixin = declare( null, {
                                 // schema.validate() will wipe it
                                 if( options.children ) var _children = obj._children;
 
-                                self.schema.validate( obj, function( err, obj, errors ){
+                                self.schema.validate( obj, { deserialize: true }, function( err, obj, errors ){
 
                                   // If there is an error, end of story
                                   // If validation fails, call callback with self.SchemaError
@@ -322,7 +324,7 @@ var MongoMixin = declare( null, {
 
                             if( obj === null ) return done( null, obj );
 
-                            self.schema.validate( obj, function( err, obj, errors ){
+                            self.schema.validate( obj, {  deserialize: true }, function( err, obj, errors ){
 
                               // If there is an error, end of story
                               // If validation fails, call callback with self.SchemaError (MAYBE?)
@@ -404,7 +406,7 @@ var MongoMixin = declare( null, {
                         if( options.children ) var _children = doc._children;
 
                         changeFunctions.push( function( callback ){
-                          self.schema.validate( doc, function( err, validatedDoc, errors ){
+                          self.schema.validate( doc,  { deserialize: true }, function( err, validatedDoc, errors ){
                             if( err ){
                               callback( err );
                             } else {
@@ -482,7 +484,7 @@ var MongoMixin = declare( null, {
     var onlyObjectValues = options.deleteUnsetFields ? false : true;
 
     // Validate what was passed...
-    self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues }, function( err, updateObject, errors ){
+    self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
 
       // If there is an error, end of story
       // If validation fails, call callback with self.SchemaError
@@ -595,7 +597,7 @@ var MongoMixin = declare( null, {
     }
 
     // Validate the record against the schema
-    self.schema.validate( record, function( err, record, errors ){
+    self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
 
       // If there is an error, end of story
       // If validation fails, call callback with self.SchemaError
@@ -841,7 +843,6 @@ var MongoMixin = declare( null, {
 
   makeAllIndexes: function( options, cb ){
 
-
     var self = this;
     var indexMakers = [];
     var autoNumber = 0;
@@ -900,7 +901,7 @@ var MongoMixin = declare( null, {
 
         // Adds this index maker to the list
         indexMakers.push( function( cb ){
-          console.log("Running makeIndex with keys:", keys );
+          consolelog("Running makeIndex with keys:", keys );
           self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
           autoNumber ++;
         });
