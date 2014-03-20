@@ -9,15 +9,29 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+// TODO: Run tests on indexes
+
 var 
   dummy
 
 , declare = require('simpledeclare')
+, SimpleSchema = require('simpleschema')
+, SimpleSchemaMongo = require('simpleschema-mongo')
 
 , MongoMixin = require('./MongoMixin.js')
 
 , mw = require('mongowrapper')
 ;
+
+
+var SchemaMixin = declare( [ SimpleSchema, SimpleSchemaMongo ] );
+
+var commonSchema = new SchemaMixin( {
+  name    : { type: 'string', searchable: true, sortable: true },
+  surname : { type: 'string', searchable: true, sortable: true },
+  age     : { type: 'number', searchable: true, sortable: true },
+  _id     : { type: 'id', searchable: true },
+});
 
 
 var simpledblayerTests = require( "./lib/simpledblayer/test.js" );
@@ -29,7 +43,7 @@ var tests = simpledblayerTests.get(
       if( err ){
         throw new Error("MongoDB connect: could not connect to database");
       } else {
-        done( null, db, MongoMixin );
+        done( null, db, SchemaMixin, MongoMixin );
       }
     });
   },
@@ -44,7 +58,8 @@ var tests = simpledblayerTests.get(
     return {
 
       "mongo prep": function( test ){
-        g.mongoPeople = new g.Layer( 'mongoPeople', {  _id: true, name: true, surname: true, age: true } );
+
+        g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema, idProperty: 'name' } );
         test.ok( g.mongoPeople );
         test.done();
       },
@@ -82,7 +97,17 @@ var tests = simpledblayerTests.get(
            });
          });
       },
+
+      
+      "indexing": function( test ){
+        g.mongoPeople.makeAllIndexes( {}, function( err ){
+          test.done();
+        });
+      }
+
     }
+
+
    
 
   }
