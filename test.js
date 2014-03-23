@@ -100,7 +100,7 @@ var tests = simpledblayerTests.get(
 
       
       "indexing": function( test ){
-        g.mongoPeople.makeAllIndexes( {}, function( err ){
+        g.mongoPeople.generateSchemaIndexes( {}, function( err ){
           test.done();
         });
       }

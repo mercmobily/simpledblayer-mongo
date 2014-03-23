@@ -816,6 +816,18 @@ var MongoMixin = declare( null, {
 
   },
 
+  dropIndex: function( name, cb ){
+
+    this.collection.dropIndex( name );
+
+    // The mongo call is synchronous, call callback manually
+    cb( null );
+  },
+    
+  dropAllIndexes: function( done ){
+    this.collection.dropAllIndexes( done );
+  },
+
   makeIndex: function( keys, name, options, cb ){
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
@@ -841,7 +853,7 @@ var MongoMixin = declare( null, {
   // Options can have:
   //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
 
-  makeAllIndexes: function( options, cb ){
+  generateSchemaIndexes: function( options, cb ){
 
     var self = this;
     var indexMakers = [];
@@ -850,11 +862,14 @@ var MongoMixin = declare( null, {
     var opt = {};
     if( options.background ) opt.background = true;
 
-    consolelog("Run makeAllIndexes for table", self.table );
+    consolelog("Run generateSchemaIndexes for table", self.table );
 
     consolelog("SEARCHABLE AND INDEXES:");
     consolelog(self._searchableHash );
     consolelog(self._permutationGroups );
+
+
+    // TODO: Add indexes for permutationGroups WITHOUT prefixes
 
     // Add permutations to indexes
     Object.keys( self._permutationGroups ).forEach( function( f ){
@@ -864,6 +879,7 @@ var MongoMixin = declare( null, {
       var prefixes = [];
       var fields = [];
       
+
       Object.keys( permutationEntry.prefixes ).forEach( function( prefix ){
         var entryValue = permutationEntry.prefixes[ prefix ];
         prefix = self._makeMongoFieldPath( prefix );
@@ -938,6 +954,11 @@ var MongoMixin = declare( null, {
       // Just a normal index
       } else {
 
+
+        // TODO: Add index with permuteBase + keys
+        // TODO: !!! Make sure that if this field is also `permute`, this doesn't get created
+        //           as it would be useless
+
         indexMakers.push( function( cb ){
           consolelog("FIELD", field, "is a normal index");
           self.makeIndex( keys, null, opt, cb );
@@ -963,11 +984,6 @@ var MongoMixin = declare( null, {
     // All done: now _actually_ create the indexes
     // (indexMarkers is an array of callbacks, each one creating one index)
     async.series( indexMakers, cb );
-  },
-
-
-  dropAllIndexes: function( done ){
-    this.collection.dropAllIndexes( done );
   },
 
 
@@ -1673,43 +1689,3 @@ MongoMixin.makeId = function( id, cb ){
 
 exports = module.exports = MongoMixin;
 
-/*
-
-  // This will need to stay until https://jira.mongodb.org/browse/SERVER-1243 is resolved (ugh)
-  _mongoUglyUpdateWrapperOBSOLETE: function( querySelector, updateObject, options, cb ){
-
-    var self = this;
-    var total = 0;
-    var partialTotal;
-
-    var rnd = Math.floor(Math.random()*100 );
-    consolelog( rnd, "ENTRY: _mongoUglyUpdateWrapper" );
-    consolelog( rnd, 'Params:' );
-    consolelog( rnd,  querySelector );
-    consolelog( rnd,  updateObject);
- 
-
-    async.whilst(
-      function() { return partialTotal != 0 },
-
-      function( callback ){
-       
-        consolelog( rnd, "In whilst function. Total: ", total );
-        self.collection.update( querySelector, updateObject, options, function( err, t ){
-          if( err ) return callback( err );
-
-          total += t;
-
-          console.log( rnd, "Update done, updated ", t, "records, total (for now) is:", total );
-
-          partialTotal = t;
-          callback( null );
-        });
-      },
-      function (err) {
-        if( err ) return cb( err );
-        cb( null, total );
-      }
-    );
-  };
-*/
