@@ -193,7 +193,7 @@ var MongoMixin = declare( null, {
     for( var field  in filters.sort ) {
       var sortDirection = filters.sort[ field ]
 
-      if( self._sortableHash[ field ] ){
+      if( self._sortableHash[ field ] || field === self.positionField ){
 
         field = self._makeMongoFieldPath( field );
         if( self._sortableHash[ field ] === 'upperCase' ){
@@ -232,6 +232,11 @@ var MongoMixin = declare( null, {
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
+    console.log("TABLE:", self.table );
+    console.log("SORT HASH", mongoParameters.sortHash );
+    console.log( Object.keys( mongoParameters.sortHash ).length );
+    console.log( self.positionField );
+
     if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
       mongoParameters.sortHash[ self.positionField ] = 1;
     }
@@ -640,7 +645,7 @@ var MongoMixin = declare( null, {
         self.collection.insert( recordWithLookups, function( err ){
           if( err ) return cb( err );
 
-          self.position( recordWithLookups, options.beforeId ? options.beforeId : null, function( err ){
+          self.reposition( recordWithLookups, options.beforeId ? options.beforeId : null, function( err ){
             if( err ) return cb( err );
 
             self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
@@ -719,7 +724,16 @@ var MongoMixin = declare( null, {
 
   },
 
-  position: function( record, moveBeforeId, cb ){
+  reposition: function( record, moveBeforeId, cb ){
+
+
+    // No position field: nothing to do
+    if( ! this.positionField ){
+       consolelog("No positionField for this table:", this.table );
+       return cb( null );
+    }
+
+    consolelog("Repositioning:", record );
 
     function moveElement(array, from, to) {
       if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
@@ -734,16 +748,6 @@ var MongoMixin = declare( null, {
 
     var updateCalls = [];
 
-
-    //consolelog("REPOSITIONING RUN");
-
-    // No position field: nothing to do
-    if( !positionField ){
-       //consolelog("No positionField for this table, not repositioning... ");
-       return cb( null );
-    }
-    //consolelog("YES POSITION FIELD");
-    
     // Make up conditionsHash based on the positionBase array
     var conditionsHash = { and: [] };
     for( var i = 0, l = self.positionBase.length -1; i < l; i ++ ){
@@ -751,7 +755,7 @@ var MongoMixin = declare( null, {
       conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
     }
 
-    //consolelog("REPOSITIONING BASING IT ON ", positionField, "IDPROPERTY: ", idProperty, "ID: ", id, "TO GO AFTER:", moveBeforeId );
+    consolelog("Repositioning basing it on", positionField, "idProperty: ", idProperty, "id: ", id, "to go after:", moveBeforeId );
 
     // Run the select, ordered by the positionField and satisfying the positionBase
     var sortParams = { };
@@ -759,43 +763,43 @@ var MongoMixin = declare( null, {
     self.select( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
       if( err ) return cb( err );
 
-      //consolelog("DATA BEFORE: ", data );
+      consolelog("Data before: ", data );
       
       // Working out `from` and `to` as positional numbers
       var from, to;
       data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
-      //consolelog("MOVE BEFORE ID: ", moveBeforeId, typeof( moveBeforeId )  );
-      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
+      consolelog("Move before ID: ", moveBeforeId, typeof( moveBeforeId )  );
+      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === 'null' ){
+        consolelog( "moveBeforeId wasn't passed or it was 'null', 'to' will be:" , data.length );
         to = data.length;
-        //consolelog( "LENGTH OF DATA: " , data.length );
       } else {
-        //consolelog("MOVE BEFORE ID WAS PASSED, LOOKING FOR ITEM BY HAND...");
+        consolelog("moveBeforeId was passed, looking for item...");
         data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
       }
 
-      //consolelog("from: ", from, ", to: ", to );
+      consolelog("from: ", from, ", to: ", to );
 
       // Actually move the elements
       if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
-        //consolelog("SWAPPINGGGGGGGGGGGGGG...");
+        consolelog("Swapping!!!");
 
         if( to > from ) to --;
         moveElement( data, from, to);
 
-        //consolelog("DATA AFTER: ", data );
+        consolelog("Data after: ", data );
 
         // Actually change the values on the DB so that they have the right order
         var updateCalls = [];
         data.forEach( function( item, i ){
 
-          //consolelog("Item: ", item, i );
+          consolelog("Item: ", item, i );
           var updateTo = {};
           updateTo[ positionField ] = i + 100;
 
           updateCalls.push( function( cb ){
             var mongoSelector = {};
             mongoSelector[ idProperty ] = item[ idProperty ];
-            //consolelog("UPDATING...", mongoSelector, { $set: updateTo } );
+            consolelog("Updating...", mongoSelector, { $set: updateTo } );
             self.collection.update( mongoSelector, { $set: updateTo }, cb );
           });
 
@@ -871,6 +875,7 @@ var MongoMixin = declare( null, {
 
     // TODO: Add indexes for permutationGroups WITHOUT prefixes
 
+    /*
     // Add permutations to indexes
     Object.keys( self._permutationGroups ).forEach( function( f ){
 
@@ -924,6 +929,7 @@ var MongoMixin = declare( null, {
 
       });
     });
+    */
 
     // Add individual searchable fields to indexes
     Object.keys( self._searchableHash ).forEach( function( field ){
