@@ -232,10 +232,10 @@ var MongoMixin = declare( null, {
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
-    console.log("TABLE:", self.table );
-    console.log("SORT HASH", mongoParameters.sortHash );
-    console.log( Object.keys( mongoParameters.sortHash ).length );
-    console.log( self.positionField );
+    consolelog("TABLE:", self.table );
+    consolelog("SORT HASH", mongoParameters.sortHash );
+    consolelog( Object.keys( mongoParameters.sortHash ).length );
+    consolelog( self.positionField );
 
     if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
       mongoParameters.sortHash[ self.positionField ] = 1;
@@ -645,7 +645,7 @@ var MongoMixin = declare( null, {
         self.collection.insert( recordWithLookups, function( err ){
           if( err ) return cb( err );
 
-          self.reposition( recordWithLookups, options.beforeId ? options.beforeId : null, function( err ){
+          self.reposition( recordWithLookups, options.beforeId ? options.beforeId : 'null', function( err ){
             if( err ) return cb( err );
 
             self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
@@ -856,127 +856,117 @@ var MongoMixin = declare( null, {
   // Make all indexes based on the schema
   // Options can have:
   //   `{ background: true }`, which will make sure makeIndex is called with { background: true }
+  //
+  // NOTE TO Db Layer DEVELOPERS USING THIS AS A TEMPLATE:
+  // I used the _indexGroups variable as mongoDB requires very specific indexing (each record "contains"
+  // its children directly, and the children's fields also need to be indexed within the parent).
+  // In normal circumstances, just scan the layer's schema for anything `searchable`.
 
   generateSchemaIndexes: function( options, cb ){
 
     var self = this;
     var indexMakers = [];
-    var autoNumber = 0;
 
     var opt = {};
-    if( options.background ) opt.background = true;
+    if( options.background ) opt.background = false;
 
     consolelog("Run generateSchemaIndexes for table", self.table );
 
-    consolelog("SEARCHABLE AND INDEXES:");
-    consolelog(self._searchableHash );
-    consolelog(self._permutationGroups );
-
-
-    // TODO: Add indexes for permutationGroups WITHOUT prefixes
-
     /*
-    // Add permutations to indexes
-    Object.keys( self._permutationGroups ).forEach( function( f ){
 
-      var permutationEntry = self._permutationGroups[ f ];
+     Go through all of the index groups for this table.
+     Assume you have schemas as follows:
 
-      var prefixes = [];
-      var fields = [];
-      
+     people = declare( DbLayer, {
 
-      Object.keys( permutationEntry.prefixes ).forEach( function( prefix ){
-        var entryValue = permutationEntry.prefixes[ prefix ];
-        prefix = self._makeMongoFieldPath( prefix );
-        
-        if( entryValue === 'upperCase' ){
-          prefix = self._addUcPrefixToPath( prefix );
-        }
-        prefixes.push( prefix );
-      });
+       schema: new Schema({
+         workspaceId: { type: 'id', searchable: true },
+         id:          { type: 'id', searchable: true },
+         name:        { type: 'string', searchable: true },
+         surname:     { type: 'string', searchable: true },
+         age:         { type: 'number', searchable: true, sortable: true },
+       }),
 
-      Object.keys( permutationEntry.fields ).forEach( function( field ){
-        var entryValue = permutationEntry.fields[ field ];
-        field = self._makeMongoFieldPath( field );
-        
-        if( entryValue === 'upperCase' ){
-          field = self._addUcPrefixToPath( field );
-        }
-        fields.push( field );
-      });
+     });
+       
+     emails = declare( DbLayer, {
 
-      consolelog( "RESULT FOR", f );
-      consolelog( prefixes );
-      consolelog( fields );
+       schema: new Schema({
+         workspaceId: { type: 'id', searchable; true },
+         id:          { type: 'id', searchable: true },
+         personId:    { type: 'id', searchable: true },
+         email:       { type: 'string', searchable: true },
+         active:      { type: 'boolean', searchable: true },
+         notes:       { type: 'string' }
+       }),
 
-      consolelog( "KEYS:" );
-      self._permute( fields ).forEach( function( combination ){
+     });
 
+     Also assume that `emails` is nested to `people`.
 
-        var keys = {};
+     The end result will be:
 
-        for( var i = 0; i < prefixes.length; i ++ ) keys[ prefixes[ i ]  ] = 1;
-        for( var i = 0; i < combination.length; i ++ ) keys[ combination[ i ]  ] = 1;
-        
-        consolelog( keys );
+     // peopleSchema
 
-        // Adds this index maker to the list
-        indexMakers.push( function( cb ){
-          consolelog("Running makeIndex with keys:", keys );
-          self.makeIndex( keys, 'autoPermuted-' + autoNumber, opt, cb );
-          autoNumber ++;
-        });
+     _indexGroups = {
+       __main: {
+         searchable: { workspaceId: true, id: true, name: true, surname: true, age: true },
+       },
 
-      });
-    });
+       __emails: {
+         searchable: { workspaceId: true, id: true, personId: true, email: true, active: true },
+       }
+     }
     */
 
-    // Add individual searchable fields to indexes
-    Object.keys( self._searchableHash ).forEach( function( field ){
-      var keys = {};
+    consolelog("indexGroups for: ", self.table );
+    consolelog(self._indexGroups );
 
-      var entryValue = self._searchableHash[ field ];
+    // Go through each group
+    Object.keys( self._indexGroups ).forEach( function( group ){
 
-      var originalField = field;
-      field = self._makeMongoFieldPath( field );
-        
-      if( entryValue === 'upperCase' ){
-        field = self._addUcPrefixToPath( field );
-      }
+      var indexGroup = self._indexGroups[ group ];
 
-      keys[ field ] = 1;
-          
-      // If it's the idProperty field, then make it unique
-      if( originalField === self.idProperty ){
+      consolelog("Dealing with group: ", group );
 
+      // Sets the field prefix. For __main, it's empty.
+      fieldPrefix = group === '__main' ? '' : group + '.';
+
+      consolelog("fieldPrefix:", fieldPrefix );
+
+      // Go through `searchable` values. For each one,
+      // add the index.
+
+      Object.keys( indexGroup.searchable ).forEach( function( searchable ){
+
+        consolelog("Searchable field:", searchable );
+
+        var entryValue = indexGroup.searchable[ searchable ];
+        consolelog("Entry valu:", entryValue );
+
+        // Add the __uc prefix (if necessary), as well as the
+        // path prefix (in case it's not __main)
+        if( entryValue === 'upperCase' ){
+          searchable = self._addUcPrefixToPath( searchable );
+        }
+        searchable = fieldPrefix + searchable;
+
+        // Turn it into a proper field path (it will only affect fields with "." in them)
+        searchable = self._makeMongoFieldPath( searchable );
+
+        var indexKeys = {};
+
+        // Adding index maker for the straight search
+        indexKeys[ searchable ] = 1;
         indexMakers.push( function( cb ){
-          consolelog("FIELD", field, "IS idParam, making it unique!");
-          var opt2 = {};
-          opt2.background = !!opt.background;
-          opt2.unique = true;
-          self.makeIndex( keys, null, opt2, cb );
+          consolelog("Running makeIndex for table/keys:", self.table, indexKeys );
+          self.makeIndex( indexKeys, null, opt, cb );
         });
 
-      // Just a normal index
-      } else {
-
-
-        // TODO: Add index with permuteBase + keys
-        // TODO: !!! Make sure that if this field is also `permute`, this doesn't get created
-        //           as it would be useless
-
-        indexMakers.push( function( cb ){
-          consolelog("FIELD", field, "is a normal index");
-          self.makeIndex( keys, null, opt, cb );
-        });
-
-      }
-
-      consolelog("SINGLE KEYS FOR", self.table );
-      consolelog( keys );
+      });
     });
 
-    
+
     // Add index for positionField, keeping into account positionBaseField
     var keys = {};
     self.positionBase.forEach( function( positionBaseField ){
@@ -991,7 +981,6 @@ var MongoMixin = declare( null, {
     // (indexMarkers is an array of callbacks, each one creating one index)
     async.series( indexMakers, cb );
   },
-
 
 
   // ******************************************************************
