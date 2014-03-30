@@ -189,14 +189,15 @@ var MongoMixin = declare( null, {
     var sortHash = {};
 
     consolelog( "filters.sort is:", filters.sort );        
-    consolelog( "_sortableHash is:", self._sortableHash );        
+    //consolelog( "_sortableHash is:", self._sortableHash );        
     for( var field  in filters.sort ) {
       var sortDirection = filters.sort[ field ]
 
-      if( self._sortableHash[ field ] || field === self.positionField ){
+      //if( self._sortableHash[ field ] || field === self.positionField ){
+      if( self._searchableHash[ field ] || field === self.positionField ){
 
         field = self._makeMongoFieldPath( field );
-        if( self._sortableHash[ field ] === 'upperCase' ){
+        if( self._searchableHash[ field ] === 'upperCase' ){
           field = self._addUcPrefixToPath( field );
         }
 
@@ -370,6 +371,7 @@ var MongoMixin = declare( null, {
           });
 
         } else {
+
 
           cursor.toArray( function( err, queryDocs ){
             if( err ){
@@ -645,21 +647,17 @@ var MongoMixin = declare( null, {
         self.collection.insert( recordWithLookups, function( err ){
           if( err ) return cb( err );
 
-          self.reposition( recordWithLookups, options.beforeId ? options.beforeId : 'null', function( err ){
+          self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
             if( err ) return cb( err );
 
-            self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
+            if( ! options.returnRecord ) return cb( null );
+
+            self.collection.findOne( { _id: recordWithLookups._id }, self._projectionHash, function( err, doc ){
               if( err ) return cb( err );
 
-              if( ! options.returnRecord ) return cb( null );
+              if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
 
-              self.collection.findOne( { _id: recordWithLookups._id }, self._projectionHash, function( err, doc ){
-                if( err ) return cb( err );
-
-                if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-
-                cb( null, doc );
-              });
+              cb( null, doc );
             });
           });
         });
@@ -733,6 +731,12 @@ var MongoMixin = declare( null, {
        return cb( null );
     }
 
+    // moveBeforeId is 
+    if( typeof( moveBeforeId ) === 'undefined' ){
+       consolelog("beforeId is undefined, skipping repositioning" );
+       return cb( null );
+    }
+
     consolelog("Repositioning:", record );
 
     function moveElement(array, from, to) {
@@ -769,8 +773,8 @@ var MongoMixin = declare( null, {
       var from, to;
       data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
       consolelog("Move before ID: ", moveBeforeId, typeof( moveBeforeId )  );
-      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === 'null' ){
-        consolelog( "moveBeforeId wasn't passed or it was 'null', 'to' will be:" , data.length );
+      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
+        consolelog( "moveBeforeId was null, 'to' will be:" , data.length );
         to = data.length;
       } else {
         consolelog("moveBeforeId was passed, looking for item...");

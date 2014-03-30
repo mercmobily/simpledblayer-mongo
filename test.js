@@ -17,6 +17,7 @@ var
 , declare = require('simpledeclare')
 , SimpleSchema = require('simpleschema')
 , SimpleSchemaMongo = require('simpleschema-mongo')
+, SimpleDbLayer = require('simpledblayer')
 
 , MongoMixin = require('./MongoMixin.js')
 
@@ -100,7 +101,11 @@ var tests = simpledblayerTests.get(
 
       
       "indexing": function( test ){
-        g.mongoPeople.generateSchemaIndexes( {}, function( err ){
+   
+        SimpleDbLayer.getLayer('peopleR').generateSchemaIndexes( {}, function( err ){
+ 
+        //g.mongoPeople.generateSchemaIndexes( {}, function( err ){
+          //console.log("HUMMMM", SimpleDbLayer.getAllLayers() );
           test.done();
         });
       }
