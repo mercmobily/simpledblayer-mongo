@@ -43,7 +43,7 @@ var MongoMixin = declare( null, {
     Object.keys( self.schema.structure ).forEach( function( field ) {
       var entry = self.schema.structure[ field ];
       self._fieldsHash[ field ] = true;
-			if( ! entry.skipProjection ) self._projectionHash[ field ] = true;
+      if( ! entry.skipProjection ) self._projectionHash[ field ] = true;
     });
 
     // Create self.collection, used by every single query
@@ -180,7 +180,8 @@ var MongoMixin = declare( null, {
 
       }
       consolelog( "FINAL SELECTOR" );        
-      //consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
+      consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
+      consolelog( this.table );
     };    
 
     // make sortHash
@@ -212,6 +213,7 @@ var MongoMixin = declare( null, {
 
  
   select: function( filters, options, cb ){
+
 
     var self = this;
     var saneRanges;
@@ -255,6 +257,7 @@ var MongoMixin = declare( null, {
 
 
     consolelog("PH: ", mongoParameters.querySelector, projectionHash );
+    consolelog("TABLE: ", self.table );
 
     // Actually run the query 
     var cursor = self.collection.find( mongoParameters.querySelector, projectionHash );
@@ -534,6 +537,8 @@ var MongoMixin = declare( null, {
       } catch( e ){
         return cb( e );
       }
+
+      
 
       consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
       consolelog( rnd, "Selector:", mongoParameters.querySelector );
@@ -1490,7 +1495,9 @@ var MongoMixin = declare( null, {
             }
 
             var selector = {};
-            selector[ '_children.' + field + "." + parentLayer.idProperty ] = id;
+            selector[ '_children.' + field + "." + self.idProperty ] = id;
+            consolelog( rnd, "SELECTOR:" );
+            consolelog( rnd, selector );
 
             parentLayer.collection.update( selector, { $set: relativeUpdateObject, $unset: relativeUnsetObject }, { multi: true }, function( err, total ){
               if( err ) return cb( err );
@@ -1568,7 +1575,7 @@ var MongoMixin = declare( null, {
             var updateObject = {};
 
             var selector = {};
-            selector[ '_children.' + field + "." + parentLayer.idProperty ] = id;
+            selector[ '_children.' + field + "." + self.idProperty ] = id;
 
             // It's a lookup field: it will assign an empty object
             if( nestedParams.type === 'lookup' ){
@@ -1580,7 +1587,8 @@ var MongoMixin = declare( null, {
               updateObject[ '$pull' ] = {};
 
               var pullData = {};
-              pullData[ parentLayer.idProperty  ] =  id ;
+              // TODO: CHECK IF THIS SHOULD BE self.idProperty OR parentLayer.idProperty
+              pullData[ self.idProperty  ] =  id ;
               updateObject[ '$pull' ] [ '_children.' + field ] = pullData;
             }
 
