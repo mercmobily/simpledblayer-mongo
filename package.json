@@ -19,7 +19,8 @@
  "dependencies": {
     "simpledblayer": "0.3.x",
     "simpledeclare": "0.3.x",
-    "mongowrapper": "0.3.x"
+    "mongowrapper": "0.3.x",
+    "async": "~0.2.x"
   },
   "scripts": {
     "test": "nodeunit test.js"
