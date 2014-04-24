@@ -729,7 +729,6 @@ var MongoMixin = declare( null, {
 
   reposition: function( record, moveBeforeId, cb ){
 
-
     // No position field: nothing to do
     if( ! this.positionField ){
        consolelog("No positionField for this table:", this.table );
@@ -742,7 +741,7 @@ var MongoMixin = declare( null, {
        return cb( null );
     }
 
-    consolelog("Repositioning:", record );
+    consolelog("Reposition called on ", record, " to be moved bere:", moveBeforeId );
 
     function moveElement(array, from, to) {
       if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
@@ -759,12 +758,12 @@ var MongoMixin = declare( null, {
 
     // Make up conditionsHash based on the positionBase array
     var conditionsHash = { and: [] };
-    for( var i = 0, l = self.positionBase.length -1; i < l; i ++ ){
+    for( var i = 0, l = self.positionBase.length; i < l; i ++ ){
       var positionBaseField = self.positionBase[ i ];
       conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
     }
 
-    consolelog("Repositioning basing it on", positionField, "idProperty: ", idProperty, "id: ", id, "to go after:", moveBeforeId );
+    consolelog("Repositioning basing it on", positionField, "conditionsHash:", conditionsHash, "positionBase: ", self.positionBase, "idProperty: ", idProperty, "id: ", id, "to go after:", moveBeforeId );
 
     // Run the select, ordered by the positionField and satisfying the positionBase
     var sortParams = { };
