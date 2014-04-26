@@ -647,6 +647,7 @@ var MongoMixin = declare( null, {
         if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = ObjectId();
 
         consolelog( rnd, "record with _id added:", record );
+        consolelog( rnd, "ADDING:", recordWithLookups );
 
         // Actually run the insert
         self.collection.insert( recordWithLookups, function( err ){
@@ -657,7 +658,19 @@ var MongoMixin = declare( null, {
 
             if( ! options.returnRecord ) return cb( null );
 
-            self.collection.findOne( { _id: recordWithLookups._id }, self._projectionHash, function( err, doc ){
+
+            // The insert operation might actually return a reecord (if returnRecord is on).
+            // In this case, projectionHash will need to also have _children in order to
+            // return the actual record with its _children
+            var projectionHash = {};
+            if( ! options.children ){
+              projectionHash = self._projectionHash;
+            } else {
+              for( var k in self._projectionHash ) projectionHash[ k ] = self._projectionHash[ k ];
+              projectionHash._children = true;
+            }
+
+            self.collection.findOne( { _id: recordWithLookups._id }, projectionHash, function( err, doc ){
               if( err ) return cb( err );
 
               if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
