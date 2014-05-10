@@ -21,7 +21,7 @@ var
 ;
 
 var consolelog = function(){
-  //console.log.apply( console, arguments );
+//  console.log.apply( console, arguments );
 }
 
 var MongoMixin = declare( null, {
@@ -635,7 +635,7 @@ var MongoMixin = declare( null, {
 
       consolelog( rnd, "record with __uc__ fields:", record );
  
-      self._makeRecordWithLookups( record, function( err, recordWithLookups ){
+      self._completeRecord( record, function( err, recordWithLookups ){
         if( err ) return cb( err );
      
         consolelog( rnd, "recordWithLookups is:", recordWithLookups);
@@ -1097,13 +1097,13 @@ var MongoMixin = declare( null, {
 
 
 
-  _makeRecordWithLookups: function( record, cb ){
+  _completeRecord: function( record, cb ){
 
     var self = this;
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY:  _makeRecordWithLookups for ", self.table, 'record:',  record );
+    consolelog( rnd, "ENTRY:  _completeRecord for ", self.table, 'record:',  record );
 
     var recordWithLookups = {};
 
@@ -1115,70 +1115,40 @@ var MongoMixin = declare( null, {
     // Each added record needs to be ready for its _children
     recordWithLookups._children = {};
 
-    // Prepare the ground: for each child table of type "multiple", add an
-    // empty value in recordWithLookups.[children & searchData] as an empty
-    // array. Future updates and inserts might add/delete/update records in there
-    Object.keys( self.childrenTablesHash ).forEach( function( k ){
-      if( self.childrenTablesHash[ k ].nestedParams.type === 'multiple' ){
-        recordWithLookups._children[ k ] = [];
-      } 
-    });
-
     // Cycle through each lookup child of the current record,
     async.eachSeries(
-      Object.keys( recordWithLookups ),
+      Object.keys( self.multipleChildrenTablesHash ),
 
       function( recordKey, cb ){
-      
-        //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
-        if( ! self.lookupChildrenTablesHash[ recordKey ] ){
-          //consolelog( rnd, "It isn't! Ignoring it...");
-          return cb( null );
-        } else {
-          consolelog( rnd, "It is! Processing it...");
-          consolelog( rnd, recordKey, "Is a lookup table!");
-
-          var childTableData = self.lookupChildrenTablesHash[ recordKey ];
-
-          var childLayer = childTableData.layer;
-          var nestedParams = childTableData.nestedParams;
-
-          consolelog( rnd, "Working on ", childTableData.layer.table );
-          consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
-
-          // EXCEPTION: check if the record being looked up isn't the same as the one
-          // being added. This is an edge case, but it's nice to cover it
-          if( childLayer.table === self.table && recordWithLookups[ self.idProperty ] === recordWithLookups[ recordKey ] ){
-
-            // Make up a temporary copy of the record, to which _children and __uc__ fields
-            // will be added
-            var t = {};
-            for( var k in record ) t[ k ] = record[ k ];
-            childLayer._addUcFields( t );
-            t._children = {};
-            recordWithLookups._children[ recordKey ] = t;
+     
+        consolelog( rnd, "Working on multiple table:", recordKey);
         
-            return cb( null );
-          }
+        consolelog( rnd, recordKey, "Is a multiple table!");
 
-          // Get children data for that child table
-          // ROOT to _getChildrenData
-          self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
-            if( err ) return cb( err );
+        var childTableData = self.multipleChildrenTablesHash[ recordKey ];
 
-            childLayer._addUcFields( childData );
-            childData._children = {};
+        var childLayer = childTableData.layer;
+        var nestedParams = childTableData.nestedParams;
 
-            consolelog( rnd, "The childData data is:", childData );
+        consolelog( rnd, "Working on ", childTableData.layer.table );
+        consolelog( rnd, "Getting children data (multiple) in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
 
-             // Make the record uppercase since it's for a search
-            recordWithLookups._children[ recordKey ] = childData;
+        // Get children data for that child table
+        // ROOT to _getChildrenData
+        self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
+          if( err ) return cb( err );
 
-            // That's it!
-            cb( null );
-          });
+          // childLayer._addUcFields( childData );
+          // childData._children = {};
 
-        }
+          consolelog( rnd, "The childData data is:", childData );
+
+           // Make the record uppercase since it's for a search
+          recordWithLookups._children[ recordKey ] = childData;
+
+          // That's it!
+          cb( null );
+        });
       },
 
       // End of cycle: function can continue
@@ -1186,11 +1156,90 @@ var MongoMixin = declare( null, {
       function( err ){
         if( err ) return cb( err );
 
-        consolelog( rnd, "About to insert. At this point, recordWithLookups is:", recordWithLookups );
+        consolelog( rnd, "Multiple record lookup in insert done. At this point, recordWithLookups is:", recordWithLookups );
 
-        cb( null, recordWithLookups );
+        
+
+        // Cycle through each lookup child of the current record,
+        async.eachSeries(
+          Object.keys( self.lookupChildrenTablesHash ),
+
+          function( recordKey, cb ){
+     
+            consolelog( rnd, "Working on lookup table:", recordKey);
+ 
+            var childTableData = self.lookupChildrenTablesHash[ recordKey ];
+
+            var childLayer = childTableData.layer;
+            var nestedParams = childTableData.nestedParams;
+
+            consolelog( rnd, "Working on ", childTableData.layer.table );
+            consolelog( rnd, "Getting children data (lookup) in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
+
+            // EXCEPTION: check if the record being looked up isn't the same as the one
+            // being added. This is an edge case, but it's nice to cover it
+            if( childLayer.table === self.table && recordWithLookups[ self.idProperty ] === recordWithLookups[ recordKey ] ){
+
+              // Make up a temporary copy of the record, to which _children and __uc__ fields
+              // will be added
+              var t = {};
+              for( var k in record ) t[ k ] = record[ k ];
+              childLayer._addUcFields( t );
+              t._children = {};
+              recordWithLookups._children[ recordKey ] = t;
+        
+              return cb( null );
+            }
+
+            // Get children data for that child table
+            // ROOT to _getChildrenData
+            self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
+              if( err ) return cb( err );
+
+              if( childData ){
+              
+                childLayer._addUcFields( childData );
+                childData._children = {};
+
+                consolelog( rnd, "The childData data is:", childData );
+
+                 // Make the record uppercase since it's for a search
+                recordWithLookups._children[ recordKey ] = childData;
+              }
+
+              // That's it!
+              cb( null );
+            });
+          },
+
+          // End of cycle: function can continue
+
+          function( err ){
+            if( err ) return cb( err );
+
+            consolelog( rnd, "Multiple record lookup in insert done. At this point, recordWithLookups is:", recordWithLookups );
+
+            cb( null, recordWithLookups );
+          }
+        );
+
       }
     );
+
+
+
+
+    // Prepare the ground: for each child table of type "multiple", add an
+    // empty value in recordWithLookups.[children & searchData] as an empty
+    // array. Future updates and inserts might add/delete/update records in there
+    /*
+    Object.keys( self.childrenTablesHash ).forEach( function( k ){
+      if( self.childrenTablesHash[ k ].nestedParams.type === 'multiple' ){
+        recordWithLookups._children[ k ] = [];
+      } 
+    });
+    */
+
   },
 
   _makeUpdateObjectWithLookups: function( updateObject, cb ){
@@ -1319,6 +1368,11 @@ var MongoMixin = declare( null, {
 
       consolelog( rnd, "Records fetched:", res );
    
+      // Return null if it's a lookup and there are no results
+      if( res.length == 0 && childTableData.nestedParams.type == 'lookup' ){
+        return cb( null, null );
+      }
+
       // For each result, add them to resultObject
       async.eachSeries(
         res,
@@ -1336,7 +1390,6 @@ var MongoMixin = declare( null, {
           // making sure that it's in the right spot (depending on the type)
           switch( childTableData.nestedParams.type ){
             case 'lookup':
-             //var loadAs = childTableData.nestedParams.loadAs ? childTableData.nestedParams.loadAs : childTableData.nestedParams.layer.table;
              var loadAs = childTableData.nestedParams.parentField;
              consolelog( rnd, "Item is a lookup, assigning resultobject[ ", loadAs,' ] to ', resultObject );
              resultObject = item;
