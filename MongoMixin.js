@@ -21,7 +21,7 @@ var
 ;
 
 var consolelog = function(){
-//  console.log.apply( console, arguments );
+  //console.log.apply( console, arguments );
 }
 
 var MongoMixin = declare( null, {
@@ -1131,7 +1131,7 @@ var MongoMixin = declare( null, {
         var nestedParams = childTableData.nestedParams;
 
         consolelog( rnd, "Working on ", childTableData.layer.table );
-        consolelog( rnd, "Getting children data (multiple) in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
+        consolelog( rnd, "Getting children data (multiple) in child table ", childTableData.layer.table, "for record", recordWithLookups );
 
         // Get children data for that child table
         // ROOT to _getChildrenData
