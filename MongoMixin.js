@@ -182,7 +182,7 @@ var MongoMixin = declare( null, {
       consolelog( "FINAL SELECTOR" );        
       consolelog( require('util').inspect( finalSelector, { depth: 10 } ) );        
       consolelog( this.table );
-    };    
+    };
 
     // make sortHash
     // If field is marked as upperCase, swap field names for _uc_ equivalent so that
