@@ -517,17 +517,17 @@ var MongoMixin = declare( null, {
       // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
       // so that partial PUTs will "overwrite" whole objects rather than
       // just overwriting fields that are _actually_ present in `body`
+      // NOTE: fields marked as "protected" in the schema are spared, as they are... well, protected!
       if( options.deleteUnsetFields ){
         Object.keys( self._fieldsHash ).forEach( function( i ){
-           if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
-             unsetObject[ i ] = 1;
+          if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
+            unsetObject[ i ] = 1;
 
-             // Get rid of __uc__ objects if the equivalent field was out
-             if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
-               unsetObject[ '__uc__' + i ] = 1;
-             }
-
-           }
+            // Get rid of __uc__ objects if the equivalent field was out
+            if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
+              unsetObject[ '__uc__' + i ] = 1;
+            }
+          }
         });
       }
 
