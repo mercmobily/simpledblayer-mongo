@@ -543,15 +543,18 @@ var MongoMixin = declare( null, {
       consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
       consolelog( rnd, "Selector:", mongoParameters.querySelector );
 
-      self._makeUpdateObjectWithLookups( updateObject, function( err, updateObjectWithLookups ){
+      self._makeUpdateAndUnsetObjectWithLookups( updateObject, unsetObject, function( err, updateObjectWithLookups, unsetObjectWithLookups  ){
         if( err ) return cb( err );
 
         consolelog( rnd, "Update object with lookups:", updateObjectWithLookups );
+        consolelog( rnd, "Unset object with lookups:", unsetObjectWithLookups );
 
         // If options.multi is off, then use findAndModify which will accept sort
         if( !options.multi ){
 
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObject }, function( err, doc ){
+          console.log("READ THIS:", { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups } );
+
+          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, function( err, doc ){
             if( err ) return cb( err );
 
             if( doc ){
@@ -572,7 +575,7 @@ var MongoMixin = declare( null, {
         } else {
 
           // Run the query
-          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObject }, { multi: true }, function( err, total ){
+          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { multi: true }, function( err, total ){
             if( err ) return cb( err );
 
             // MONGO: Change parents
@@ -1242,17 +1245,19 @@ var MongoMixin = declare( null, {
 
   },
 
-  _makeUpdateObjectWithLookups: function( updateObject, cb ){
+  _makeUpdateAndUnsetObjectWithLookups: function( updateObject, unsetObject, cb ){
     var self = this;
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY:  _makeUpdateObjectWithLookups for ", self.table, 'updateObject:',  updateObject );
+    consolelog( rnd, "ENTRY:  _makeUpdateAndUnsetObjectWithLookups for ", self.table, 'updateObject:',  updateObject );
 
     // Make a copy of the original updateObject. The copy will be
     // enriched and will then be returned
     var updateObjectWithLookups = {};
     for( var k in updateObject ) updateObjectWithLookups[ k ] = updateObject[ k ];
+    var unsetObjectWithLookups = {};
+    for( var k in unsetObject ) unsetObjectWithLookups[ k ] = unsetObject[ k ];
 
     // This is only for aesthetic purposes. In an update, the update object
     // "is" the record (although it might be a partial version of it)
@@ -1260,7 +1265,7 @@ var MongoMixin = declare( null, {
 
     // Cycle through each lookup child of the update object
     async.eachSeries(
-      Object.keys( record ),
+      Object.keys( self.lookupChildrenTablesHash ),
 
       function( recordKey, cb ){
       
@@ -1284,15 +1289,33 @@ var MongoMixin = declare( null, {
           self._getChildrenData( record, recordKey, function( err, childData){
             if( err ) return cb( err );
 
-            childLayer._addUcFields( childData );
-            childData._children = {};
+            if( childData ){
 
-            consolelog( rnd, "The childData data is:", childData );
+              // Add uppercase fields
+              childLayer._addUcFields( childData );
 
-            updateObjectWithLookups[ '_children.' + recordKey ] = childData;
+              // Add _children to childData, as it's expected a lot of times
+              childData._children = {};
 
-            // That's it!
-            cb( null );
+              // Make up the updateObjectWithLookup object with the new childData
+              updateObjectWithLookups[ '_children.' + recordKey ] = childData;
+
+              // That's it!
+              cb( null );
+            } else {
+
+              // Watch out: protected fields mustn't be overwritten by an update
+              if( ! self.schema.structure[ recordKey ].protected ){
+
+                // Make up the unsetObjectWithLookup object with the new childData
+                unsetObjectWithLookups[ '_children.' + recordKey ] = 1;
+              }
+
+              // That's it!
+              cb( null );
+      
+            }
+
           });
 
         }
@@ -1303,7 +1326,7 @@ var MongoMixin = declare( null, {
       function( err ){
         if( err ) return cb( err );
 
-        cb( null, updateObjectWithLookups );
+        cb( null, updateObjectWithLookups, unsetObjectWithLookups );
       }
     );
 
