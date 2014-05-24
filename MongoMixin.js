@@ -552,7 +552,7 @@ var MongoMixin = declare( null, {
         // If options.multi is off, then use findAndModify which will accept sort
         if( !options.multi ){
 
-          console.log("READ THIS:", { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups } );
+          //console.log("READ THIS:", { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups } );
 
           self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, function( err, doc ){
             if( err ) return cb( err );
