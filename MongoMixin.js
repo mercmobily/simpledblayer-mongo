@@ -743,20 +743,15 @@ var MongoMixin = declare( null, {
 
   },
 
-  reposition: function( record, moveBeforeId, cb ){
+  reposition: function( record, moveBeforeId, defaultNewToStart, cb ){
 
     // No position field: nothing to do
     if( ! this.positionField ){
-       consolelog("No positionField for this table:", this.table );
+       consolelog("No positionField for this table, skipping repositioning: ", this.table );
        return cb( null );
     }
 
-    // moveBeforeId is 
-    if( typeof( moveBeforeId ) === 'undefined' ){
-       consolelog("beforeId is undefined, skipping repositioning" );
-       return cb( null );
-    }
-
+    
     consolelog("Reposition called on ", record, " to be moved bere:", moveBeforeId );
 
     function moveElement(array, from, to) {
@@ -789,19 +784,31 @@ var MongoMixin = declare( null, {
 
       consolelog("Data before: ", data );
       
-      // Working out `from` and `to` as positional numbers
+      // Working out `from` as a potitional number in the array
       var from, to;
       data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
+
+      // Working out `to` as a potitional number in the array
       consolelog("Move before ID: ", moveBeforeId, typeof( moveBeforeId )  );
-      if( typeof( moveBeforeId ) === 'undefined' || moveBeforeId === null ){
-        consolelog( "moveBeforeId was null, 'to' will be:" , data.length );
-        to = data.length;
-      } else {
-        consolelog("moveBeforeId was passed, looking for item...");
+
+
+      // moveBeforeId is truly: finding the ID in the array and setting `to`
+      if( moveBeforeId ) {
+
+        consolelog( "moveBeforeId was truly, inferring 'to'" );
+
         data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
+        consolelog( "Found: ", to );
+
+      // moveBeforeId is not specfied: using default positioning
+      } else {
+        consolelog( "moveBeforeId was falsy, position will be determined by default placement" );
+
+        to = defaultNewToStart ? 0 : data.length;
+        consolelog( "defaultNewToStart is ", defaultNewToStart," so `to` will be " , to );
       }
 
-      consolelog("from: ", from, ", to: ", to );
+      consolelog("END RESULTS: from: ", from, ", to: ", to );
 
       // Actually move the elements
       if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
@@ -831,7 +838,6 @@ var MongoMixin = declare( null, {
         
         // Runs the updates in series, calling the final callback at the end
         async.series( updateCalls , cb );
-        // cb( null );
 
       } else {
 
