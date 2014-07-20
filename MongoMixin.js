@@ -743,16 +743,15 @@ var MongoMixin = declare( null, {
 
   },
 
-  reposition: function( record, moveBeforeId, defaultNewToStart, cb ){
+  reposition: function( record, where, beforeId, cb ){
 
     // No position field: nothing to do
     if( ! this.positionField ){
-       consolelog("No positionField for this table, skipping repositioning: ", this.table );
+       consolelog("No positionField for this table, skipping repositioning altogether: ", this.table );
        return cb( null );
     }
-
     
-    consolelog("Reposition called on ", record, " to be moved bere:", moveBeforeId );
+    consolelog("Reposition called on ", record, " to be moved here:", where, "With beforeId being", beforeId );
 
     function moveElement(array, from, to) {
       if( to !== from ) array.splice( to, 0, array.splice(from, 1)[0]);
@@ -774,7 +773,7 @@ var MongoMixin = declare( null, {
       conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
     }
 
-    consolelog("Repositioning basing it on", positionField, "conditionsHash:", conditionsHash, "positionBase: ", self.positionBase, "idProperty: ", idProperty, "id: ", id, "to go after:", moveBeforeId );
+    consolelog("Repositioning basing it on", positionField, "conditionsHash:", conditionsHash, "positionBase: ", self.positionBase, "idProperty: ", idProperty, "id: ", id );
 
     // Run the select, ordered by the positionField and satisfying the positionBase
     var sortParams = { };
@@ -788,27 +787,16 @@ var MongoMixin = declare( null, {
       var from, to;
       data.forEach( function( a, i ){ if( a[ idProperty ].toString() == id.toString() ) from = i; } );
 
-      // Working out `to` as a potitional number in the array
-      consolelog("Move before ID: ", moveBeforeId, typeof( moveBeforeId )  );
-
-
-      // moveBeforeId is truly: finding the ID in the array and setting `to`
-      if( moveBeforeId ) {
-
-        consolelog( "moveBeforeId was truly, inferring 'to'" );
-
-        data.forEach( function( a, i ){ if( a[ idProperty ].toString() == moveBeforeId.toString() ) to = i; } );
-        consolelog( "Found: ", to );
-
-      // moveBeforeId is not specfied: using default positioning
-      } else {
-        consolelog( "moveBeforeId was falsy, position will be determined by default placement" );
-
-        to = defaultNewToStart ? 0 : data.length;
-        consolelog( "defaultNewToStart is ", defaultNewToStart," so `to` will be " , to );
+      // Set 'from' and 'to' depending on parameters
+      switch( where ){
+        case 'start':  to = 0; break;
+        case 'end': to = data.length; break;
+        case 'at':
+          data.forEach( function( a, i ){ if( a[ idProperty ].toString() == beforeId.toString() ) to = i; } );
+        break;
       }
 
-      consolelog("END RESULTS: from: ", from, ", to: ", to );
+      consolelog("FROM AND TO AFTER READING PARAMETERS: from: ", from, ", to: ", to );
 
       // Actually move the elements
       if( typeof( from ) !== 'undefined' && typeof( to ) !== 'undefined' ){
