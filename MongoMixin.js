@@ -214,7 +214,6 @@ var MongoMixin = declare( null, {
  
   select: function( filters, options, cb ){
 
-
     var self = this;
     var saneRanges;
 
@@ -254,7 +253,6 @@ var MongoMixin = declare( null, {
       for( var k in self._projectionHash ) projectionHash[ k ] = self._projectionHash[ k ];
       projectionHash._children = true;
     }
-
 
     consolelog("PH: ", mongoParameters.querySelector, projectionHash );
     consolelog("TABLE: ", self.table );
