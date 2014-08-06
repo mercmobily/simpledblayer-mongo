@@ -60,6 +60,9 @@ var MongoMixin = declare( null, {
   // an SQL creator for a SQL layer
   _makeMongoParameters: function( filters, fieldPrefix ){
 
+    //consolelog("FILTERS IN MONGO MIXIN: " );
+    //consolelog( require('util').inspect( filters, {depth: 10 }) );
+
     var self = this;
 
     var selector = {}, finalSelector = {};
@@ -97,7 +100,8 @@ var MongoMixin = declare( null, {
          // This way, all searches are case-insensitive
           if( self._searchableHash[ fieldPrefix + field ] === 'upperCase' ){
             v = v.toUpperCase();
-            field = fieldPrefix + '__uc__' + field;
+            field = self._addUcPrefixToPath( fieldPrefix + field );
+            //field = fieldPrefix + '__uc__' + field;
           } else {
             field = fieldPrefix + field;
           }
@@ -152,7 +156,7 @@ var MongoMixin = declare( null, {
               throw( new Error("Field type unknown: " + fieldObject.type ) );
             break;
           }
-        
+
           // Finally, push down the item!
           selector[ mongoOperand ].push( item );
         });
