@@ -144,7 +144,7 @@ var MongoMixin = declare( null, {
 
             case 'contain':
             case 'contains':
-              item[ field ] = new RegExp('.*' + v + '.*' );
+              item[ field ] = new RegExp('^.*' + v + '.*$' );
             break;
 
             case 'endsWith':
@@ -334,6 +334,10 @@ var MongoMixin = declare( null, {
                             if( obj !== null && typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
 
                             if( obj === null ) return done( null, obj );
+
+                            // We will need this later if option.children was true, as
+                            // schema.validate() will wipe it
+                            if( options.children ) var _children = obj._children;
 
                             self.schema.validate( obj, {  deserialize: true }, function( err, obj, errors ){
 
