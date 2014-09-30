@@ -1270,7 +1270,9 @@ var MongoMixin = declare( null, {
       function( recordKey, cb ){
       
         //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
-        if( ! self.lookupChildrenTablesHash[ recordKey ] ){
+        // ...and that it's define in the record itself (it might be a partial update)
+        //if( ! self.lookupChildrenTablesHash[ recordKey ] ){
+        if( ! self.lookupChildrenTablesHash[ recordKey ] || typeof( record[ recordKey ] ) === 'undefined' ){
           //consolelog( rnd, "It isn't! Ignoring it...");
           return cb( null );
         } else {
