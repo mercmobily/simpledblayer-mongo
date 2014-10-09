@@ -15,14 +15,16 @@ var
 , declare = require('simpledeclare')
 , mongoWrapper = require('mongowrapper')
 , async = require('async')
+, debug = require( 'debug' )
 
 , ObjectId = mongoWrapper.ObjectId
 , checkObjectId = mongoWrapper.checkObjectId
 ;
 
-var consolelog = function(){
-  //console.log.apply( console, arguments );
-}
+
+
+var consolelog = debug( 'simpledblayer:mongo');
+
 
 var MongoMixin = declare( null, {
 
