@@ -60,7 +60,7 @@ var MongoMixin = declare( null, {
 
   // Make parameters for queries. It's the equivalent of what would be
   // an SQL creator for a SQL layer
-  _makeMongoParameters: function( filters, fieldPrefix ){
+  _makeMongoParameters: function( filters, fieldPrefix, ignoreSearchable ){
 
     //consolelog("FILTERS IN MONGO MIXIN: " );
     //consolelog( require('util').inspect( filters, {depth: 10 }) );
@@ -91,9 +91,11 @@ var MongoMixin = declare( null, {
           var v = fieldObject.value;
 
           // If a search is attempted on a non-searchable field, will throw
-          //consolelog("SEARCHABLE HASH: ", self._searchableHash, field );
-          if( !self._searchableHash[ fieldPrefix + field ] ){
-            //consolelog( self._searchableHash, { depth: 10 } );
+          consolelog("SEARCHABLE HASH: ", self._searchableHash);
+          consolelog("Prefix:", fieldPrefix );
+          consolelog("Field:", field );
+          if( !self._searchableHash[ fieldPrefix + field ] && ! ignoreSearchable ){
+            consolelog( "NOT SEARCHABLE!" );
             throw( new Error("Field " + fieldPrefix + field + " is not searchable" ) );
           }
 
@@ -1706,6 +1708,8 @@ var MongoMixin = declare( null, {
             // Assign the parameters
             var filters = params.filters;
 
+            consolelog("Making filter...", filters, field );
+
             // Make up parameters from the passed filters
             try {
               var mongoParameters = parentLayer._makeMongoParameters( filters, field );
@@ -1713,13 +1717,17 @@ var MongoMixin = declare( null, {
               return cb( e );
             }
 
+            consolelog("GOT HERE..." );
+
             // Make up parameters from the passed filters
             try {
-              var mongoParametersForPull = parentLayer._makeMongoParameters( filters );
+              var mongoParametersForPull = parentLayer._makeMongoParameters( filters, undefined, true );
             } catch( e ){
               return cb( e );
             }
 
+            consolelog("mongoParameters:", mongoParameters );
+            consolelog("mongoParametersForPull:", mongoParametersForPull );
 
             // The update object will depend on whether it's a push or a pull
             var updateObject = {};
@@ -1728,8 +1736,14 @@ var MongoMixin = declare( null, {
             // Note that we don't need the "ugly hack" here (_mongoUglyUpdateWrapper) as the update
             // only counts for one field per parent
             if( nestedParams.type === 'lookup' ){
+
+              consolelog("It's a lookup!");
+
               updateObject[ '$set' ] = {};
               updateObject[ '$set'] [ '_children.' + field ] = {};
+
+              consolelog("Query Selector:", mongoParameters.querySelector );
+              consolelog("Update object:", updateObject );
 
               parentLayer.collection.update( mongoParameters.querySelector, updateObject, { multi: true }, function( err, total ){
                 if( err ) return cb( err );
@@ -1742,8 +1756,12 @@ var MongoMixin = declare( null, {
             // Note that we don't need the "ugly hack" here (_mongoUglyUpdateWrapper) as the $pull operation in MongoDB
             // takes a condition itself -- condition that I replicate
             } else {
+
               updateObject[ '$pull' ] = {};
               updateObject[ '$pull' ] [ '_children.' + field ] = mongoParametersForPull.querySelector;
+
+              consolelog("Query Selector:", mongoParameters.querySelector );
+              consolelog("Update object:", updateObject );
 
               parentLayer.collection.update( mongoParameters.querySelector, updateObject, { multi: true }, function( err, total ){
                 if( err ) return cb( err );
