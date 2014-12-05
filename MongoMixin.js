@@ -51,6 +51,9 @@ var MongoMixin = declare( null, {
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
+
+    MongoMixin.registry[ table ] = self;
+
   },
 
   // The default id maker available as an object method
@@ -94,8 +97,8 @@ var MongoMixin = declare( null, {
           consolelog("SEARCHABLE HASH: ", self._searchableHash);
           consolelog("Prefix:", fieldPrefix );
           consolelog("Field:", field );
+
           if( !self._searchableHash[ fieldPrefix + field ] && ! ignoreSearchable ){
-            consolelog( "NOT SEARCHABLE!" );
             throw( new Error("Field " + fieldPrefix + field + " is not searchable" ) );
           }
 
