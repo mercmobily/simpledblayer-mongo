@@ -1800,9 +1800,8 @@ MongoMixin.makeId = function( id, cb ){
   } else {
     cb( null, ObjectId( id ) );
   }
-},
+};
 
-
-
+MongoMixin.registry = {};
 exports = module.exports = MongoMixin;
 
