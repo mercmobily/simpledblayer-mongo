@@ -26,12 +26,22 @@ var
 var consolelog = debug( 'simpledblayer:mongo');
 
 
+
+function _makeOperator( op ){
+  return function( a, b ){
+    var r = {};
+    r[ a ] = { };
+    r[ a ][ op ] =  b;
+    return r;
+  }
+}
+
 var MongoMixin = declare( null, {
 
   _projectionHash: {},
   _fieldsHash: {},
 
-  constructor: function( table, options ){
+  constructor: function(){
 
     var self = this;
 
@@ -51,8 +61,7 @@ var MongoMixin = declare( null, {
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
-
-    MongoMixin.registry[ table ] = self;
+    MongoMixin.registry[ self.table ] = self;
 
   },
 
@@ -61,20 +70,145 @@ var MongoMixin = declare( null, {
     MongoMixin.makeId( object, cb );
   },
 
+
+  _isSearchableAsString: function( field ){
+    return this._searchableHash[ field ] && this._searchableHash[ field ].type === 'string'; 
+  },
+
+  _addPrefix: function( field, fieldPrefix, ignoreSearchable ){
+    var self = this;
+
+    // mongoPath will be the full path
+    var dottedPath = ( ( typeof( fieldPrefix ) === 'string' && fieldPrefix !== '' ) ? fieldPrefix + '.' : '' ) + field;
+
+    // From now on, `fieldPrefix + field` will always work (will be either just the field or `path.field`)
+    //fieldPrefix = ( fieldPrefix === '' ) ? '' : fieldPrefix + '.';
+
+    // Check that it's searchable
+    if( !self._searchableHash[ dottedPath ] && ! ignoreSearchable ){
+      throw( new Error("Field " + dottedPath + " is not searchable" ) );
+    }
+
+    return dottedPath;
+  },
+
+
+  // If there are ".", then some children records are being referenced.
+  // The actual way they are placed in the record is in _children; so,
+  // add _children where needed.
+  _addChildrenPrefixToPath: function( s ){
+
+    if( s.match(/\./ ) ){
+
+      var l = s.split( /\./ );
+      for( var i = 0; i < l.length-1; i++ ){
+        l[ i ] = '_children.' + l[ i ];
+      }
+      return l.join( '.' );
+
+    } else {
+      return s;
+    }   
+  },
+
+  _addUcPrefixToPath: function( s ){
+    var a = s.split('.');
+    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
+    return a.join('.');
+  },
+
+  _operators: {
+
+    lt: _makeOperator( '$lt' ),
+    gt: _makeOperator( '$gt' ),
+
+    lte: _makeOperator( '$lte' ),
+    gte: _makeOperator( '$gte' ),
+
+    eq: function( a, b ){
+      var r = {};
+      r[ a ] = b;
+      return r;
+    },
+ 
+    is: function( a, b ){
+      var r = {};
+      r[ a ] = b;
+      return r;
+    },
+ 
+    startsWith: function( a, b ){
+      var r = {};
+      r[ a ] = new RegExp('^' + b + '.*' );
+      return r;
+    },
+
+    endsWith: function( a, b ){
+      var r = {};
+      r[ a ] = new RegExp('.*' + v + '$' );
+      return r;
+    },
+
+    contains: function( a, b ){
+      var r = {};
+      r[ a ] =  new RegExp('^.*' + v + '.*$' );
+      return r;
+    }
+
+  },
+
+
   // Make parameters for queries. It's the equivalent of what would be
   // an SQL creator for a SQL layer
   _makeMongoParameters: function( filters, fieldPrefix, ignoreSearchable ){
+    return  {
+      querySelector: this._makeMongoFilter( filters.conditions, fieldPrefix, ignoreSearchable ),
+      sortHash:  this._makeMongoSortHash( filters.sort, fieldPrefix, ignoreSearchable )
+    }
+  },
+    
+  _makeMongoFilter: function( conditions, fieldPrefix, ignoreSearchable ){
 
     //consolelog("FILTERS IN MONGO MIXIN: " );
     //consolelog( require('util').inspect( filters, {depth: 10 }) );
 
     var self = this;
 
-    var selector = {}, finalSelector = {};
+    // Scan filters recursively, making up the mongo query
+    if( conditions.name == 'and' || conditions.name == 'or' ){
+     
+      // For 'and', it will return { $and: [ ... ] }
+      var mongoName = '$' + conditions.name;
 
+      // The content of the $and key will be the result of makeMongo
+      var r = {};
+      r[ mongoName ] = conditions.args.map( function( item ){
+        return self._makeMongoFilter( item );
+      })          
+      return r;
+
+    } else {
+      // Otherwise, run the operator encoutered
+      // (But, remember to fixup the field name (paths, etc.) and possibly the checked value (uppercase)
+      var a, b;
+      var operator = this._operators[ conditions.name ];
+      if( ! operator ) throw( new Error( "Could not find operator: " + conditions.name ) ); 
+
+      a = this._addPrefix( conditions.args[ 0 ], fieldPrefix, ignoreSearchable );
+      b = this._isSearchableAsString( a ) ? conditions.args[ 1 ].toUpperCase() : conditions.args[ 1 ];
+     
+      // Add __uc__ (if field is 'string') and _children (if there are sub-fields) to path
+      var fullA = self._addChildrenPrefixToPath( self._addUcPrefixToPath( a ) );
+
+      return operator.call( this, fullA, b, fieldPrefix, ignoreSearchable );
+    }
+
+/*
+
+    var selector = {}, finalSelector = {};
     if( typeof( filters.conditions ) !== 'undefined' && filters.conditions !== null ){
-      selector[ '$and' ] =  [];
-      selector[ '$or' ] =  [];
+      selector[ '$and' ] = [];
+      selector[ '$or' ] = [];
 
       Object.keys( filters.conditions ).forEach( function( condition ){
 
@@ -102,9 +236,9 @@ var MongoMixin = declare( null, {
             throw( new Error("Field " + fieldPrefix + field + " is not searchable" ) );
           }
 
-         // Change 'field' so that it includes the full path, including the prefix.
-         // If it's a string, change to uppercase search (uppercase v, and search on __uc__ field)
-         // This way, all searches are case-insensitive
+          // Change 'field' so that it includes the full path, including the prefix.
+          // If it's a string, change to uppercase search (uppercase v, and search on __uc__ field)
+          // This way, all searches are case-insensitive
           if( self._searchableHash[ fieldPrefix + field ] === 'upperCase' ){
             v = v.toUpperCase();
             field = self._addUcPrefixToPath( fieldPrefix + field );
@@ -115,7 +249,7 @@ var MongoMixin = declare( null, {
 
           // If there are ".", then some children records are being referenced.
           // The actual way they are placed in the record is in _children; so,
-          // add _children where needed.
+          // add '_children' where needed.
           field = self._makeMongoFieldPath( field );
 
           // Make up item. Note that any search will be based on _searchData
@@ -195,23 +329,32 @@ var MongoMixin = declare( null, {
       consolelog( this.table );
     };
 
+    */
+
     // make sortHash
     // If field is marked as upperCase, swap field names for _uc_ equivalent so that
     // sorting happens regardless of upper or lower case
+  }, 
+
+
+  _makeMongoSortHash: function( sort, fieldPrefix, ignoreSearchable ){
+
+    var self = this;
     var sortHash = {};
 
-    consolelog( "filters.sort is:", filters.sort );        
+    consolelog( "filters.sort is:", sort );        
     //consolelog( "_sortableHash is:", self._sortableHash );        
-    for( var field  in filters.sort ) {
-      var sortDirection = filters.sort[ field ]
+    for( var field  in sort ) {
+      var sortDirection = sort[ field ]
 
-      //if( self._sortableHash[ field ] || field === self.positionField ){
-      if( self._searchableHash[ field ] || field === self.positionField ){
-
-        field = self._makeMongoFieldPath( field );
-        if( self._searchableHash[ field ] === 'upperCase' ){
-          field = self._addUcPrefixToPath( field );
+      var searchableHashEntry = ( fieldPrefix ? fieldPrefix + '.' : '' ) + field;
+      if( self._searchableHash[ searchableHashEntry ] || field === self.positionBaseField ){
+       
+        field = this._addPrefix( field, fieldPredix );
+        if( self._isSearchableAsString( field ) ){
+          field = this._addUcPrefixToPath( field );
         }
+        field = this._addChildrenPrefixToPath( field );
 
         sortHash[ field ] = sortDirection;
       }
@@ -219,8 +362,8 @@ var MongoMixin = declare( null, {
     consolelog( "FINAL SORTHASH", self.table );        
     consolelog( require('util').inspect( sortHash, { depth: 10 } ) );        
 
-    return { querySelector: finalSelector, sortHash: sortHash };
-  }, 
+    return sortHash;
+  },
 
  
   select: function( filters, options, cb ){
@@ -482,7 +625,6 @@ var MongoMixin = declare( null, {
     consolelog( "\n");
     consolelog( rnd, "ENTRY: update for ", self.table, ' => ', updateObject, "options:", options );
 
-
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
       cb = options;
@@ -536,8 +678,8 @@ var MongoMixin = declare( null, {
           if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField ){
             unsetObject[ i ] = 1;
 
-            // Get rid of __uc__ objects if the equivalent field was out
-            if( self._searchableHash[ i ] === 'upperCase' && unsetObject[ i ] ){
+            // Get rid of __uc__ objects if the equivalent field was taken out
+            if( self._isSearchableAsString( i ) && unsetObject[ i ] ){
               unsetObject[ '__uc__' + i ] = 1;
             }
           }
@@ -564,8 +706,6 @@ var MongoMixin = declare( null, {
 
         // If options.multi is off, then use findAndModify which will accept sort
         if( !options.multi ){
-
-          //console.log("READ THIS:", { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups } );
 
           self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, function( err, doc ){
             if( err ) return cb( err );
@@ -610,7 +750,6 @@ var MongoMixin = declare( null, {
 
     var self = this;
     var recordWithLookups = {};
-
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
@@ -944,7 +1083,7 @@ var MongoMixin = declare( null, {
          searchable: { workspaceId: true, id: true, name: true, surname: true, age: true },
        },
 
-       __emails: {
+       emails: {
          searchable: { workspaceId: true, id: true, personId: true, email: true, active: true },
        }
      }
@@ -973,17 +1112,18 @@ var MongoMixin = declare( null, {
         consolelog("Searchable field:", searchable );
 
         var entryValue = indexGroup.searchable[ searchable ];
-        consolelog("Entry valu:", entryValue );
+        consolelog("Entry value:", entryValue );
 
-        // Add the __uc prefix (if necessary), as well as the
-        // path prefix (in case it's not __main)
-        if( entryValue === 'upperCase' ){
-          searchable = self._addUcPrefixToPath( searchable );
-        }
+        // fieldPrefix is empty for __main
         searchable = fieldPrefix + searchable;
 
+        // Add the __uc prefix (if necessary)
+        if( self._isSearchableAsString( searchable ) ) {
+          searchable = self._addUcPrefixToPath( searchable );
+        }
+        
         // Turn it into a proper field path (it will only affect fields with "." in them)
-        searchable = self._makeMongoFieldPath( searchable );
+        searchable = self._addChildrenPrefixToPath( searchable );
 
         var indexKeys = {};
 
@@ -1074,38 +1214,11 @@ var MongoMixin = declare( null, {
     var self = this;
 
     for( var k in record ){
-      if( self._searchableHash[ k ] === 'upperCase' ){
+      if( self._isSearchableAsString( k ) ){
         record[ '__uc__' + k ] = record[ k ].toUpperCase();
       }
     }
   },
-
-  // If there are ".", then some children records are being referenced.
-  // The actual way they are placed in the record is in _children; so,
-  // add _children where needed.
-  _makeMongoFieldPath: function( s ){
-
-    if( s.match(/\./ ) ){
-
-      var l = s.split( /\./ );
-      for( var i = 0; i < l.length-1; i++ ){
-        l[ i ] = '_children.' + l[ i ];
-      }
-      return l.join( '.' );
-
-    } else {
-      return s;
-    }
-   
-  },
-
-  _addUcPrefixToPath: function( s ){
-    var a = s.split('.');
-    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
-    return a.join('.');
-  },
-
-
 
   _completeRecord: function( record, cb ){
 
@@ -1153,7 +1266,7 @@ var MongoMixin = declare( null, {
 
           consolelog( rnd, "The childData data is:", childData );
 
-           // Make the record uppercase since it's for a search
+          // Make the record uppercase since it's for a search
           recordWithLookups._children[ recordKey ] = childData;
 
           // That's it!
@@ -1167,8 +1280,6 @@ var MongoMixin = declare( null, {
         if( err ) return cb( err );
 
         consolelog( rnd, "Multiple record lookup in insert done. At this point, recordWithLookups is:", recordWithLookups );
-
-        
 
         // Cycle through each lookup child of the current record,
         async.eachSeries(
@@ -1184,7 +1295,7 @@ var MongoMixin = declare( null, {
             var nestedParams = childTableData.nestedParams;
 
             consolelog( rnd, "Working on ", childTableData.layer.table );
-            consolelog( rnd, "Getting children data (lookup) in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", recordWithLookups );
+            consolelog( rnd, "Getting children data (lookup) in child table ", childTableData.layer.table," for field ", nestedParams.localField ," for record", recordWithLookups );
 
             // EXCEPTION: check if the record being looked up isn't the same as the one
             // being added. This is an edge case, but it's nice to cover it
@@ -1291,7 +1402,7 @@ var MongoMixin = declare( null, {
           var nestedParams = childTableData.nestedParams;
 
           consolelog( rnd, "Working on ", childTableData.layer.table );
-          consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.parentField ," for record", record );
+          consolelog( rnd, "Getting children data in child table ", childTableData.layer.table," for field ", nestedParams.localField ," for record", record );
 
           // Get children data for that child table
           // ROOT to _getChildrenData
@@ -1363,94 +1474,62 @@ var MongoMixin = declare( null, {
     consolelog( rnd, "ENTRY: _getChildrenData for ", field, ' => ', record );
     //consolelog( rnd, "Comparing with:", Object.keys( rootTable.autoLoad ) );
 
-    // Little detail forgotten by accident
-    var resultObject;
-
     var childTableData = self.childrenTablesHash[ field ]; 
 
-    // If it's a lookup, it will be v directly. This will cover cases where a new call
-    // is made straight on the lookup
     switch( childTableData.nestedParams.type ){
 
       case 'multiple':
         consolelog( rnd, "Child table to be considered is of type MULTIPLE" );
-        resultObject = [];
+
+        // JOIN QUERY (direct)
+        var mongoSelector = {};
+        Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
+          var joinValue = childTableData.nestedParams.join[ joinKey ]
+          mongoSelector[ joinKey ] = record[ joinValue ];
+        });
+        
+        consolelog( rnd, "Running the select with selector:", mongoSelector, "on table", childTableData.layer.table );
+
+        // Runs the query, which will get the children element for that
+        // child table depending on the join
+        childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
+          if( err ) return cb( err );
+
+          if( typeof( childTableData.layer._fieldsHash._id ) === 'undefined' ){
+            cb( null, res.map( function( item ) { delete item._id } ) );
+          } else {
+            cb( null, res );
+          }
+        });
       break;
 
       case 'lookup':
+
         consolelog( rnd, "Child table to be considered is of type LOOKUP" );
-        resultObject = {};
-      break;
-    }
-   
-    // JOIN QUERY (direct)
-    var mongoSelector = {};
-    Object.keys( childTableData.nestedParams.join ).forEach( function( joinKey ){
-      var joinValue = childTableData.nestedParams.join[ joinKey ]
-      mongoSelector[ joinKey ] = record[ joinValue ];
-    });
-    
-    consolelog( rnd, "Running the select with selector:", mongoSelector, "on table", childTableData.layer.table );
 
-    // Runs the query, which will get the children element for that
-    // child table depending on the join
-    //childTableData.layer.collection.find( { conditions: { and: andConditionsArray } }, function( err, res, total ){
-    childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
-      if( err ) return cb( err );
+        // JOIN QUERY (direct)
+        var mongoSelector = {};
+        mongoSelector[ childTableData.nestedParams.layerField ] = record[ childTableData.nestedParams.localField ];
 
-      consolelog( rnd, "Records fetched:", res );
-   
-      // Return null if it's a lookup and there are no results
-      if( res.length == 0 && childTableData.nestedParams.type == 'lookup' ){
-        return cb( null, null );
-      }
+        consolelog( rnd, "Running the select with selector:", mongoSelector, "on table", childTableData.layer.table );
 
-      // For each result, add them to resultObject
-      async.eachSeries(
-        res,
-    
-        function( item, cb ){
-
-          // Since we are doing a find directly, we need to take out _id manually if
-          // it's not in the projection hash
-          if( typeof( childTableData.layer._fieldsHash._id ) === 'undefined' )  delete item._id;
-
-
-          consolelog( rnd, "Considering item:", item );
-   
-          // Assign the loaded item to the resultObject
-          // making sure that it's in the right spot (depending on the type)
-          switch( childTableData.nestedParams.type ){
-            case 'lookup':
-             var loadAs = childTableData.nestedParams.parentField;
-             consolelog( rnd, "Item is a lookup, assigning resultobject[ ", loadAs,' ] to ', resultObject );
-             resultObject = item;
-            break;
-            case 'multiple':
-              consolelog( rnd, "Item is of type multiple, pushing it to", resultObject );
-              resultObject.push( item );
-            break;
-            default:
-              cb( new Error( "Parameter 'type' needs to be 'lookup' or 'multiple' " ) );
-            break;
-          };
-
-          consolelog( rnd, "resultObject after the cure is:", resultObject );
-
-          cb( null );
-            
-        },
-
-        function( err ){
+        // Runs the query, which will get the children element for that
+        // child table depending on the join
+        childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
           if( err ) return cb( err );
 
-          consolelog( rnd, "EXIT: End of function. Returning:", require('util').inspect( resultObject, { depth: 5 }  ) );
+          // Return null if it's a lookup and there are no results
+          if( res.length == 0 ){
+            return cb( null, null );
+          }
+          var r = res[ 0 ];
 
-          cb( null, resultObject );
-        }
-      ) // async.series
+          if( typeof( childTableData.layer._fieldsHash._id ) === 'undefined' ) delete r._id;
 
-    })
+          return cb( null, r );
+        });
+      break;
+    }
   },
 
 
@@ -1489,23 +1568,20 @@ var MongoMixin = declare( null, {
         var parentLayer = parentTableData.layer;
         var nestedParams = parentTableData.nestedParams;
 
-        
-        // If it's not meant to be searchable, skip it
-        //if( ! nestedParams.searchable && params.field === '_searchData' ){
-        //  consolelog( rnd, "Child table doesn't have searchable and _searchData was to be populated, skipping..." );
-        //  return cb( null );
-        //}
-
-        // Figure out what to pass as the second parameter of _getChildrenData: 
+        // Figure out the field name, relative to _children.XXXXX 
         // - For multiple, it will just be the table's name
-        // - For lookups, it will be the parentField value in nestedParams
+        // - For lookups, it will be the localField value in nestedParams
         var field;
         switch( nestedParams.type ){
           case 'multiple': field = self.table; break;
-          case 'lookup'  : field = nestedParams.parentField; break;
+          case 'lookup'  : field = nestedParams.localField; break;
           default        : return cb( new Error("The options parameter must be a non-null object") ); break;
         }
-        consolelog( rnd, "field for ", nestedParams.type, "is:", field );
+        consolelog( "FIELD:", field );
+        consolelog( "PARAMETERS:", nestedParams );
+        consolelog( "PARAMETERS TYPE:", nestedParams.type );
+
+        consolelog( rnd, "fielddd for ", nestedParams.type, "is:", field );
 
         /* THREE CASES:
           * CASE #1: Insert
@@ -1612,14 +1688,15 @@ var MongoMixin = declare( null, {
 
             // Sorry, can't. MongoDb bug #1243
             if( nestedParams.type === 'multiple' ){
-              cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is unimplementable") );
+              return cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is unimplementable") );
             }
+
+            // The rest is untested and untestable code (not till #1243 is solved)
 
             // Assign the parameters
             var filters = params.filters;
             var updateObject = params.updateObject;
             var unsetObject = params.unsetObject;
-
 
             // Make up parameters from the passed filters
             try {
@@ -1655,8 +1732,6 @@ var MongoMixin = declare( null, {
             
               return cb( null );
             });
-
-
           }
 
         // CASE #3 -- DELETE
@@ -1736,8 +1811,6 @@ var MongoMixin = declare( null, {
             var updateObject = {};
 
             // It's a lookup field: it will assign an empty object
-            // Note that we don't need the "ugly hack" here (_mongoUglyUpdateWrapper) as the update
-            // only counts for one field per parent
             if( nestedParams.type === 'lookup' ){
 
               consolelog("It's a lookup!");
@@ -1756,8 +1829,6 @@ var MongoMixin = declare( null, {
               });
 
             // It's a multiple one: it will $pull the elementS (with an S, plural) out
-            // Note that we don't need the "ugly hack" here (_mongoUglyUpdateWrapper) as the $pull operation in MongoDB
-            // takes a condition itself -- condition that I replicate
             } else {
 
               updateObject[ '$pull' ] = {};
