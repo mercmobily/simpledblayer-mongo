@@ -196,10 +196,11 @@ var MongoMixin = declare( null, {
       // Making up aWithPrefix, useful to check if it's searchable, if
       // b should be converted to upperCase(), etc.
 
-      // Add prefix to `a`
+      // Create aWithPrefi, whici is simply `a` with the prefix prepended
+      // to it
       aWithPrefix = this._addPrefix( a, fieldPrefix );
 
-      // Check that a is indeed searchable
+      // Check that aWithPrefix is indeed searchable
       if( !self._searchableHash[ aWithPrefix ] ){
         throw( new Error("Field " + aWithPrefix + " is not searchable" ) );
       }
@@ -208,7 +209,8 @@ var MongoMixin = declare( null, {
       // if this check later on, to determine whether to add __uc__ to `a`
       aIsSearchableAsString = this._isSearchableAsString( aWithPrefix );
 
-      // upperCase() b if a is of type 'string'
+      // `upperCase()` `b` if a is of type 'string', since it will be compared to
+      // the __uc__ equivalent field
       b = aIsSearchableAsString ? b.toUpperCase() : b;
      
       // Unless we want a selector without path (only used when `$pull`ing an array in `deleteMany`),
@@ -218,7 +220,7 @@ var MongoMixin = declare( null, {
       // Add __uc__ (if field is 'string') to path
       if( aIsSearchableAsString ) a = self._addUcPrefixToPath( a );
 
-      // Add _children to `a`
+      // Add _children to `a` (unless a selector without bells was required)
       a = selectorWithoutBells ? a : self._addChildrenPrefixToPath( a );
 
       // Call the operator on the two values
@@ -710,29 +712,53 @@ var MongoMixin = declare( null, {
         self.collection.insert( recordWithLookups, function( err ){
           if( err ) return cb( err );
 
-          self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
+          // This will get called shortly. Bypasses straight to callback
+          // or calls reposition with right parameters and then calls callback
+          repositionIfNeeded = function( cb ){
+            if( ! self.positionField ){
+              cb( null );;
+            } else {
+        
+              // If repositioning is required, do it
+              if( self.positionField ){
+                var where, beforeId;
+                if( ! options.position ){
+                  where = 'end';
+                } else {
+                  where = options.position.where;
+                  beforeId = options.position.beforeId;
+                }
+                self.reposition( recordWithLookups, where, beforeId, cb );
+              }
+            }
+          }
+          repositionIfNeeded( function( err ){
             if( err ) return cb( err );
 
-            if( ! options.returnRecord ) return cb( null );
 
-
-            // The insert operation might actually return a reecord (if returnRecord is on).
-            // In this case, projectionHash will need to also have _children in order to
-            // return the actual record with its _children
-            var projectionHash = {};
-            if( ! options.children ){
-              projectionHash = self._projectionHash;
-            } else {
-              for( var k in self._projectionHash ) projectionHash[ k ] = self._projectionHash[ k ];
-              projectionHash._children = true;
-            }
-
-            self.collection.findOne( { _id: recordWithLookups._id }, projectionHash, function( err, doc ){
+            self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
               if( err ) return cb( err );
 
-              if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+              if( ! options.returnRecord ) return cb( null );
 
-              cb( null, doc );
+              // The insert operation might actually return a record (if returnRecord is on).
+              // In this case, projectionHash will need to also have _children in order to
+              // return the actual record with its _children
+              var projectionHash = {};
+              if( ! options.children ){
+                projectionHash = self._projectionHash;
+              } else {
+                for( var k in self._projectionHash ) projectionHash[ k ] = self._projectionHash[ k ];
+                projectionHash._children = true;
+              }
+
+              self.collection.findOne( { _id: recordWithLookups._id }, projectionHash, function( err, doc ){
+                if( err ) return cb( err );
+
+                if( doc !== null && typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+                cb( null, doc );
+              });
             });
           });
         });
@@ -766,8 +792,6 @@ var MongoMixin = declare( null, {
     } catch( e ){
       return cb( e );
     }
-
-    console.log("HERE:", mongoParameters )
 
     // If options.multi is off, then use findAndModify which will accept sort
     if( !options.multi ){
@@ -819,6 +843,7 @@ var MongoMixin = declare( null, {
 
     var self = this;
 
+    var one = false;
     var positionField = self.positionField;
     var idProperty = self.idProperty;
     var conditionsHash = {};
@@ -827,11 +852,13 @@ var MongoMixin = declare( null, {
     var updateCalls = [];
 
     // Make up conditionsHash based on the positionBase array
-    var conditionsHash = { and: [] };
+    var conditionsHash = { name: 'and', args: [] };
     for( var i = 0, l = self.positionBase.length; i < l; i ++ ){
       var positionBaseField = self.positionBase[ i ];
-      conditionsHash.and.push( { field: positionBaseField, type: 'eq', value: record[ positionBaseField ] } );
+      conditionsHash.args.push( { name: 'eq', args: [ positionBaseField, record[ positionBaseField ] ] } );
+      one = true;
     }
+    if( !one ) conditionsHash = {}; 
 
     consolelog("Repositioning basing it on", positionField, "conditionsHash:", conditionsHash, "positionBase: ", self.positionBase, "idProperty: ", idProperty, "id: ", id );
 
@@ -1703,7 +1730,7 @@ var MongoMixin = declare( null, {
               return cb( e );
             }
 
-            console.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!GOT HERE..." );
+            consolelog("!!!!!!!!!!!!!!!!!!!!!!!!!!!GOT HERE..." );
 
             // Make up parameters from the passed filters
             try {
@@ -1712,8 +1739,8 @@ var MongoMixin = declare( null, {
               return cb( e );
             }
 
-            console.log("mongoParameters:", mongoParameters );
-            console.log("mongoParametersForPull:", mongoParametersForPull );
+            consolelog("mongoParameters:", mongoParameters );
+            consolelog("mongoParametersForPull:", mongoParametersForPull );
 
             // The update object will depend on whether it's a push or a pull
             var updateObject = {};
@@ -1739,13 +1766,13 @@ var MongoMixin = declare( null, {
             // It's a multiple one: it will $pull the elementS (with an S, plural) out
             } else {
 
-              console.log("It's a multiple!");
+              consolelog("It's a multiple!");
 
               updateObject[ '$pull' ] = {};
               updateObject[ '$pull' ] [ '_children.' + field ] = mongoParametersForPull.querySelector;
 
-              console.log("Query Selector:", mongoParameters.querySelector );
-              console.log("Update object:", updateObject );
+              consolelog("Query Selector:", mongoParameters.querySelector );
+              consolelog("Update object:", updateObject );
 
               parentLayer.collection.update( mongoParameters.querySelector, updateObject, { multi: true }, function( err, total ){
                 if( err ) return cb( err );
