@@ -61,6 +61,9 @@ var MongoMixin = declare( null, {
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
+    if( MongoMixin.registry[ self.table ] ){
+      throw new Error( "Only one layer instance can be created for table " + self.table );
+    }
     MongoMixin.registry[ self.table ] = self;
 
   },
@@ -75,21 +78,11 @@ var MongoMixin = declare( null, {
     return this._searchableHash[ field ] && this._searchableHash[ field ].type === 'string'; 
   },
 
-  _addPrefix: function( field, fieldPrefix, ignoreSearchable ){
-    var self = this;
+  _addPrefix: function( field, fieldPrefix ){
 
     // mongoPath will be the full path
-    var dottedPath = ( ( typeof( fieldPrefix ) === 'string' && fieldPrefix !== '' ) ? fieldPrefix + '.' : '' ) + field;
+    return ( ( typeof( fieldPrefix ) === 'string' && fieldPrefix !== '' ) ? fieldPrefix + '.' : '' ) + field;
 
-    // From now on, `fieldPrefix + field` will always work (will be either just the field or `path.field`)
-    //fieldPrefix = ( fieldPrefix === '' ) ? '' : fieldPrefix + '.';
-
-    // Check that it's searchable
-    if( !self._searchableHash[ dottedPath ] && ! ignoreSearchable ){
-      throw( new Error("Field " + dottedPath + " is not searchable" ) );
-    }
-
-    return dottedPath;
   },
 
 
@@ -130,13 +123,7 @@ var MongoMixin = declare( null, {
       r[ a ] = b;
       return r;
     },
- 
-    is: function( a, b ){
-      var r = {};
-      r[ a ] = b;
-      return r;
-    },
- 
+  
     startsWith: function( a, b ){
       var r = {};
       r[ a ] = new RegExp('^' + b + '.*' );
@@ -160,19 +147,27 @@ var MongoMixin = declare( null, {
 
   // Make parameters for queries. It's the equivalent of what would be
   // an SQL creator for a SQL layer
-  _makeMongoParameters: function( filters, fieldPrefix, ignoreSearchable ){
+  _makeMongoParameters: function( filters, fieldPrefix, selectorWithoutBells ){
     return  {
-      querySelector: this._makeMongoFilter( filters.conditions, fieldPrefix, ignoreSearchable ),
-      sortHash:  this._makeMongoSortHash( filters.sort, fieldPrefix, ignoreSearchable )
+      querySelector: this._makeMongoFilter( filters.conditions || {}, fieldPrefix, selectorWithoutBells ),
+      sortHash:  this._makeMongoSortHash( filters.sort || {}, fieldPrefix )
     }
   },
     
-  _makeMongoFilter: function( conditions, fieldPrefix, ignoreSearchable ){
+  // Converts `conditions` to a workable mongo filters. Most of the complexity of thi
+  // function is due to the fact that it deals with the presence of `fieldPrefix` (in case
+  // a child field is being modified, which will imply adding _children. to it) and
+  // the presence of `selectorWithoutBells` (necessary for `$pull` operation in children)
+  _makeMongoFilter: function( conditions, fieldPrefix, selectorWithoutBells ){
 
     //consolelog("FILTERS IN MONGO MIXIN: " );
     //consolelog( require('util').inspect( filters, {depth: 10 }) );
 
     var self = this;
+    var a, aWithPrefix, aIsSearchableAsString, b;
+      
+    // If there is no condition, return an empty filter
+    if( ! conditions.name ) return {};
 
     // Scan filters recursively, making up the mongo query
     if( conditions.name == 'and' || conditions.name == 'or' ){
@@ -183,30 +178,57 @@ var MongoMixin = declare( null, {
       // The content of the $and key will be the result of makeMongo
       var r = {};
       r[ mongoName ] = conditions.args.map( function( item ){
-        return self._makeMongoFilter( item );
+        return self._makeMongoFilter( item, fieldPrefix, selectorWithoutBells );
       })          
       return r;
 
     } else {
+
       // Otherwise, run the operator encoutered
       // (But, remember to fixup the field name (paths, etc.) and possibly the checked value (uppercase)
-      var a, b;
       var operator = this._operators[ conditions.name ];
       if( ! operator ) throw( new Error( "Could not find operator: " + conditions.name ) ); 
 
-      a = this._addPrefix( conditions.args[ 0 ], fieldPrefix, ignoreSearchable );
-      b = this._isSearchableAsString( a ) ? conditions.args[ 1 ].toUpperCase() : conditions.args[ 1 ];
-     
-      // Add __uc__ (if field is 'string') and _children (if there are sub-fields) to path
-      var fullA = self._addChildrenPrefixToPath( self._addUcPrefixToPath( a ) );
+      // Save this for later
+      a = conditions.args[ 0 ];
+      b = conditions.args[ 1 ];
 
-      return operator.call( this, fullA, b, fieldPrefix, ignoreSearchable );
+      // Making up aWithPrefix, useful to check if it's searchable, if
+      // b should be converted to upperCase(), etc.
+
+      // Add prefix to `a`
+      aWithPrefix = this._addPrefix( a, fieldPrefix );
+
+      // Check that a is indeed searchable
+      if( !self._searchableHash[ aWithPrefix ] ){
+        throw( new Error("Field " + aWithPrefix + " is not searchable" ) );
+      }
+
+      // Create aIsSearchableAsString. Saving the result as I will need the result
+      // if this check later on, to determine whether to add __uc__ to `a`
+      aIsSearchableAsString = this._isSearchableAsString( aWithPrefix );
+
+      // upperCase() b if a is of type 'string'
+      b = aIsSearchableAsString ? b.toUpperCase() : b;
+     
+      // Unless we want a selector without path (only used when `$pull`ing an array in `deleteMany`),
+      // `a` needs to become `aWithPrefix`.
+      a = selectorWithoutBells ? a : aWithPrefix;
+
+      // Add __uc__ (if field is 'string') to path
+      if( aIsSearchableAsString ) a = self._addUcPrefixToPath( a );
+
+      // Add _children to `a`
+      a = selectorWithoutBells ? a : self._addChildrenPrefixToPath( a );
+
+      // Call the operator on the two values
+      return operator.call( this, a, b, fieldPrefix, selectorWithoutBells );
     }
 
   }, 
 
 
-  _makeMongoSortHash: function( sort, fieldPrefix, ignoreSearchable ){
+  _makeMongoSortHash: function( sort, fieldPrefix ){
 
     var self = this;
     var sortHash = {};
@@ -219,7 +241,14 @@ var MongoMixin = declare( null, {
       var searchableHashEntry = ( fieldPrefix ? fieldPrefix + '.' : '' ) + field;
       if( self._searchableHash[ searchableHashEntry ] || field === self.positionBaseField ){
        
+        // Add prefix to the field
         field = this._addPrefix( field, fieldPredix );
+
+        // Check that it's searchable -- if not, it's not sortble either
+        if( !self._searchableHash[ field ] ){
+          throw( new Error("Field " + dottedPath + " is not searchable, and therefore not sortable" ) );
+        }
+
         if( self._isSearchableAsString( field ) ){
           field = this._addUcPrefixToPath( field );
         }
@@ -484,11 +513,14 @@ var MongoMixin = declare( null, {
   },
 
 
-  update: function( filters, updateObject, options, cb ){
+  update: function( conditions, updateObject, options, cb ){
 
     var self = this;
 
     var unsetObject = {};
+
+    // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
+    var filters = { conditions: conditions };
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
@@ -508,14 +540,14 @@ var MongoMixin = declare( null, {
     // deleteUnsetFields is there so that a "document.save()"-style called can be performed
     // easily.
     if( options.multi && options.deleteUnsetFields ){
-      return cb( new Error("THe options multi and deleteUnsetFields are mutually exclusive -- one or the other") );
+      return cb( new Error("The options 'multi' and 'deleteUnsetFields' are mutually exclusive -- one or the other") );
     }
 
     // Validate the record against the schema
 
     // If deleteUnsetFields is set, then the validation will apply to _every_ field in the schema.
     // Otherwise, just to the passed fields is fine
-    var onlyObjectValues = options.deleteUnsetFields ? false : true;
+    var onlyObjectValues = !options.deleteUnsetFields;
 
     // Validate what was passed...
     self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
@@ -575,6 +607,7 @@ var MongoMixin = declare( null, {
 
         // If options.multi is off, then use findAndModify which will accept sort
         if( !options.multi ){
+
 
           self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, function( err, doc ){
             if( err ) return cb( err );
@@ -708,9 +741,12 @@ var MongoMixin = declare( null, {
   },
 
 
-  'delete': function( filters, options, cb ){
+  'delete': function( conditions, options, cb ){
 
     var self = this;
+
+    // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
+    var filters = { conditions: conditions };
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
@@ -730,6 +766,8 @@ var MongoMixin = declare( null, {
     } catch( e ){
       return cb( e );
     }
+
+    console.log("HERE:", mongoParameters )
 
     // If options.multi is off, then use findAndModify which will accept sort
     if( !options.multi ){
@@ -752,7 +790,8 @@ var MongoMixin = declare( null, {
     // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
     } else {
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
- 
+
+  
         self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
           if( err ) return cb( err );
          
@@ -1664,17 +1703,17 @@ var MongoMixin = declare( null, {
               return cb( e );
             }
 
-            consolelog("GOT HERE..." );
+            console.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!GOT HERE..." );
 
             // Make up parameters from the passed filters
             try {
-              var mongoParametersForPull = parentLayer._makeMongoParameters( filters, undefined, true );
+              var mongoParametersForPull = parentLayer._makeMongoParameters( filters, field, true );
             } catch( e ){
               return cb( e );
             }
 
-            consolelog("mongoParameters:", mongoParameters );
-            consolelog("mongoParametersForPull:", mongoParametersForPull );
+            console.log("mongoParameters:", mongoParameters );
+            console.log("mongoParametersForPull:", mongoParametersForPull );
 
             // The update object will depend on whether it's a push or a pull
             var updateObject = {};
@@ -1700,11 +1739,13 @@ var MongoMixin = declare( null, {
             // It's a multiple one: it will $pull the elementS (with an S, plural) out
             } else {
 
+              console.log("It's a multiple!");
+
               updateObject[ '$pull' ] = {};
               updateObject[ '$pull' ] [ '_children.' + field ] = mongoParametersForPull.querySelector;
 
-              consolelog("Query Selector:", mongoParameters.querySelector );
-              consolelog("Update object:", updateObject );
+              console.log("Query Selector:", mongoParameters.querySelector );
+              console.log("Update object:", updateObject );
 
               parentLayer.collection.update( mongoParameters.querySelector, updateObject, { multi: true }, function( err, total ){
                 if( err ) return cb( err );
