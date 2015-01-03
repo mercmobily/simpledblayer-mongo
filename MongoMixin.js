@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2013 Tony Mobily
+Copyright (C) 2015 Tony Mobily
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -716,14 +716,14 @@ var MongoMixin = declare( null, {
           // or calls reposition with right parameters and then calls callback
           repositionIfNeeded = function( cb ){
             if( ! self.positionField ){
-              cb( null );;
+              cb( null );
             } else {
         
               // If repositioning is required, do it
               if( self.positionField ){
                 var where, beforeId;
                 if( ! options.position ){
-                  where = 'end';
+                  where = 'last';
                 } else {
                   where = options.position.where;
                   beforeId = options.position.beforeId;
@@ -876,9 +876,9 @@ var MongoMixin = declare( null, {
 
       // Set 'from' and 'to' depending on parameters
       switch( where ){
-        case 'start':  to = 0; break;
-        case 'end': to = data.length; break;
-        case 'at':
+        case 'first':  to = 0; break;
+        case 'last': to = data.length; break;
+        case 'before':
           data.forEach( function( a, i ){ if( a[ idProperty ].toString() == beforeId.toString() ) to = i; } );
         break;
       }
@@ -941,10 +941,7 @@ var MongoMixin = declare( null, {
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
-    consolelog("Making indexes for table", this.table, "and keys:");
-    consolelog( keys );
-    consolelog("And options:");
-    consolelog( options );
+    console.log("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
@@ -967,127 +964,154 @@ var MongoMixin = declare( null, {
   // its children directly, and the children's fields also need to be indexed within the parent).
   // In normal circumstances, just scan the layer's schema for anything `searchable`.
 
+  _addAllPrefixes: function( s, prefix ){
+
+    if( prefix ) s = prefix + '.' + s;
+
+    // Add the __uc prefix (if necessary)
+    if( this._isSearchableAsString( s ) ) {
+      s = this._addUcPrefixToPath( s );
+    }
+    // Turn it into a proper field path (it will only affect fields with "." in them)
+    s = this._addChildrenPrefixToPath( s );
+
+    return s;
+  },
+
+  _makeSignature: function( o ){
+    var s = '';
+    Object.keys( o ).sort().forEach( function( k ) { s += k; } );
+    return s;
+  },
+
   generateSchemaIndexes: function( options, cb ){
 
     var self = this;
     var indexMakers = [];
+    //var allIndexes = {};
+    var allIndexes = [];
 
+    // Normalise options
     var opt = {};
-    if( options.background ) opt.background = false;
+    if( options.background ) opt.background = true;
+      
 
-    consolelog("Run generateSchemaIndexes for table", self.table );
+    console.log("Run generateSchemaIndexes for table", self.table );
 
-    /*
+    console.log("\nindexGroups for: ", self.table );
+    console.log( require('util').inspect( self._indexGroups, { depth: 10 }  ));
+    console.log("[END]");
 
-     Go through all of the index groups for this table.
-     Assume you have schemas as follows:
+    // ***********************************************************************
+    // Adding just the keys in indexBase. This is only for the main record,
+    // since any indexing of foreign keys in children data is wastage
+    // ***********************************************************************
+    var keysJustBase = {};
+    self._indexGroups.__main.indexBase.forEach( function( indexBaseField ){
+      indexBaseField = self._addAllPrefixes( indexBaseField, '' );
+      keysJustBase[ indexBaseField ] = 1;
+    });
+    console.log("+++Adding searchable key (just base):", keysJustBase );
+    //allIndexes[ group + self._makeSignature( keysJustBase ) ] = { keys: keysJustBase, opt: opt };
+    allIndexes.push( { keys: keysJustBase, opt: opt, name: 'indexBase' } );
 
-     people = declare( DbLayer, {
-
-       schema: new Schema({
-         workspaceId: { type: 'id', searchable: true },
-         id:          { type: 'id', searchable: true },
-         name:        { type: 'string', searchable: true },
-         surname:     { type: 'string', searchable: true },
-         age:         { type: 'number', searchable: true, sortable: true },
-       }),
-
-     });
-       
-     emails = declare( DbLayer, {
-
-       schema: new Schema({
-         workspaceId: { type: 'id', searchable; true },
-         id:          { type: 'id', searchable: true },
-         personId:    { type: 'id', searchable: true },
-         email:       { type: 'string', searchable: true },
-         active:      { type: 'boolean', searchable: true },
-         notes:       { type: 'string' }
-       }),
-
-     });
-
-     Also assume that `emails` is nested to `people`.
-
-     The end result will be:
-
-     // peopleSchema
-
-     _indexGroups = {
-       __main: {
-         searchable: { workspaceId: true, id: true, name: true, surname: true, age: true },
-       },
-
-       emails: {
-         searchable: { workspaceId: true, id: true, personId: true, email: true, active: true },
-       }
-     }
-    */
-
-    consolelog("indexGroups for: ", self.table );
-    consolelog(self._indexGroups );
 
     // Go through each group
     Object.keys( self._indexGroups ).forEach( function( group ){
 
       var indexGroup = self._indexGroups[ group ];
 
-      consolelog("Dealing with group: ", group );
+      console.log("\n\nDealing with group: ", group, indexGroup );
 
       // Sets the field prefix. For __main, it's empty.
-      fieldPrefix = group === '__main' ? '' : group + '.';
+      fieldPrefix = group === '__main' ? '' : group;
 
-      consolelog("fieldPrefix:", fieldPrefix );
+      console.log("fieldPrefix:", fieldPrefix );
 
-      // Go through `searchable` values. For each one,
-      // add the index.
+      // Goes through every group...
+      Object.keys( indexGroup.indexes ).forEach( function( indexName ){
 
-      Object.keys( indexGroup.searchable ).forEach( function( searchable ){
 
-        consolelog("Searchable field:", searchable );
+        var indexData = indexGroup.indexes[ indexName ];
+        console.log("ENTRY:", indexName, indexData );
 
-        var entryValue = indexGroup.searchable[ searchable ];
-        consolelog("Entry value:", entryValue );
+        // Make up the index options, mixing opt and indexData.options
+        var indexOptions = {};
+        for( var k in opt ) indexOptions[ k ] = opt[ k ];
+        for( var k in indexData.options ) indexOptions[ k ] = indexData.options[ k ];          
 
-        // fieldPrefix is empty for __main
-        searchable = fieldPrefix + searchable;
+        // Work out indexName with prefix
+        var indexNameWithPrefix = fieldPrefix == '' ? indexName: fieldPrefix + "_" + indexName;
 
-        // Add the __uc prefix (if necessary)
-        if( self._isSearchableAsString( searchable ) ) {
-          searchable = self._addUcPrefixToPath( searchable );
-        }
-        
-        // Turn it into a proper field path (it will only affect fields with "." in them)
-        searchable = self._addChildrenPrefixToPath( searchable );
-
-        var indexKeys = {};
-
-        // Adding index maker for the straight search
-        indexKeys[ searchable ] = 1;
-        indexMakers.push( function( cb ){
-          consolelog("Running makeIndex for table/keys:", self.table, indexKeys );
-          self.makeIndex( indexKeys, null, opt, cb );
+        // ******************************
+        // Adding keys without base
+        // ******************************        
+        var keysSearchable = {};
+        Object.keys( indexData.fields ).forEach( function( fieldName ){
+          var entryData = indexData.fields[ fieldName ];
+          fieldName = self._addAllPrefixes( fieldName, fieldPrefix );
+          keysSearchable[ fieldName ] = entryData.direction;
         });
+        console.log("+++ADDING ", indexNameWithPrefix, keysSearchable, indexData.options );
+        allIndexes.push( { name: indexNameWithPrefix, keys: keysSearchable, opt: indexOptions } );
 
-      });
+        // **********************************************************************************
+        // Making up the same index as keysSearchable, but with indexBase as a starting point
+        // **********************************************************************************
+        if( indexGroup.indexBase.length && fieldPrefix == '' ){
+
+          console.log("indexBase is not empty:", indexGroup.indexBase );
+
+          // Make up the base bit
+          var keysSearchableWithBase = {};
+          indexGroup.indexBase.forEach( function( indexBaseField ){
+            indexBaseField = self._addAllPrefixes( indexBaseField );
+            keysSearchableWithBase[ indexBaseField ] = 1;
+          });
+          
+          // Add the searchable part (borriwing it from above)
+          for( var k in keysSearchable ) keysSearchableWithBase[ k ] = keysSearchable[ k ];
+
+          // Make up the index, but only the resulting key is longer than indexBase itself
+          // (E.g. indexbase is { workspaceId: 1, personId: 1 } and are indexing personId: the new
+          // field will just overwrite one in indexBase, and as a result without this check it would just
+          // index indexBase again)
+          if( Object.keys( keysSearchableWithBase ).length > indexGroup.indexBase.length ){
+            console.log("+++ADDING searchable key (with base):", 'base_' + indexName, keysSearchableWithBase,indexData.options );
+            allIndexes.push( { name: 'base_' + indexName, keys: keysSearchableWithBase, opt: indexOptions } );
+          } else {
+            console.log("+++NOT ADDING searchable key (with base), overlapping:", 'base_' + indexName );
+          }
+
+        }
+      });    
     });
 
-
+    // ***********************************************************************
     // Add index for positionField, keeping into account positionBaseField
-    var keys = {};
+    // ***********************************************************************
+    var keysForPosition = {};
     self.positionBase.forEach( function( positionBaseField ){
-      keys[ positionBaseField ] = 1;
+      keysForPosition[ positionBaseField ] = 1;
     });
-    keys[ self.positionField ] = 1;
-    indexMakers.push( function( cb ){
-      self.makeIndex( keys, null, opt, cb );
-    });
+    keysForPosition[ self.positionField ] = 1;
+    console.log("Keys for position hash:", keysForPosition );
+    //allIndexes[ '__main' + self._makeSignature( keysForPosition ) ] = { keys: keysForPosition, opt: opt };
+    allIndexes.push( { keys: keysForPosition, opt: opt, name: '_positionIndex' } );
 
-    // All done: now _actually_ create the indexes
-    // (indexMarkers is an array of callbacks, each one creating one index)
-    async.series( indexMakers, cb );
+    console.log("At this point, allIndexes is:" );
+    console.log( allIndexes );
+
+    // Actually make the indexes
+    async.eachSeries(
+      allIndexes,
+      function( item, cb ){
+        self.makeIndex( item.keys, item.name, item.opt, cb );
+      },
+      cb
+    );
+
   },
-
 
   // ******************************************************************
   // ******************************************************************
@@ -1117,7 +1141,6 @@ var MongoMixin = declare( null, {
   // ****                                                          ****
   // ******************************************************************
   // ******************************************************************
-
 
   _deleteUcFieldsfromChildren: function( _children ){
     var self = this;
