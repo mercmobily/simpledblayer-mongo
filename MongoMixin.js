@@ -266,7 +266,7 @@ var MongoMixin = declare( null, {
   },
 
 
-  _cleanRecord: function( obj, skip, cb ){
+  cleanRecord: function( obj, skip, cb ){
 
     var self = this;
 
@@ -298,13 +298,37 @@ var MongoMixin = declare( null, {
   },
   
 
-  _dirtyRecord: function( obj, cb ){
+  dirtyRecord: function( obj, cb ){
+    var self = this;
 
-    cb( null );
+    // Update record so that it's marked as "dirty"
+    var updateQuery = {};
+    updateQuery[ self.idProperty ] = obj[ self.idProperty ];
+    console.log("DOING: ", updateQuery );
+    self.collection.update( updateQuery, { $set: { _clean: false } }, { multi: false }, cb );
   },
 
-  _dirtyAllRecords: function( cb ){
-    cb( null );
+  dirtyAll: function( cb ){
+    var self = this;
+
+    // Update ALL records so that they are marked as "dirty"
+    self.collection.update( {}, { $set: { _clean: false } }, { multi: true }, cb );
+  },
+
+  dirtyAllParents: function( cb ){
+    var self = this;
+
+    async.each(
+      self.parentTablesArray,
+      function( layer, cb ){
+
+        self.parentTablesArray.forEach( function( layer ){
+          // Update ALL records so that they are marked as "dirty"
+          layer.layer.collection.update( {}, { $set: { _clean: false } }, { multi: true }, cb );
+       });
+      },
+      cb
+    );
   },
 
   select: function( filters, options, cb ){
@@ -329,10 +353,13 @@ var MongoMixin = declare( null, {
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
-    consolelog("TABLE:", self.table );
-    consolelog("SORT HASH", mongoParameters.sortHash );
-    consolelog( Object.keys( mongoParameters.sortHash ).length );
-    consolelog( self.positionField );
+    console.log("TABLE:", self.table );
+    console.log("OPTIONS", options );
+    console.log("FILTERS", filters );
+
+    console.log("SORT HASH", mongoParameters.sortHash );
+    console.log( Object.keys( mongoParameters.sortHash ).length );
+    console.log( self.positionField );
 
     if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
       mongoParameters.sortHash[ self.positionField ] = 1;
@@ -350,7 +377,7 @@ var MongoMixin = declare( null, {
     if( options.children ) projectionHash._children = true;      
     projectionHash._clean = true;
    
-    consolelog("PH: ", mongoParameters.querySelector, projectionHash );
+    consolelog("PH: ", options, mongoParameters.querySelector, projectionHash );
     consolelog("TABLE: ", self.table );
 
     // Actually run the query 
@@ -393,6 +420,7 @@ var MongoMixin = declare( null, {
                         // Returned null: nothing to see here
                         if( obj === null ) return done( null, null );
 
+                        // Mongo will return _id: if it's not in the schema, zap it
                         if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
 
                         // We will need this later if option.children was true, as
@@ -416,7 +444,7 @@ var MongoMixin = declare( null, {
                           // Note that after this call obj._children may or may not get
                           // overwritten (depends wheter _cleanRecord gets skipped).
                           var skip = !options.children || clean; 
-                          self._cleanRecord( obj, skip, function( err ){
+                          self.cleanRecord( obj, skip, function( err ){
                             if( err ) return done( err );
 
                             // Note: at this point, _children might be either the old existing one,
@@ -424,7 +452,7 @@ var MongoMixin = declare( null, {
                             // At this point, sort out _children (which might get deleted
                             // altogether or might need extra _uc__ fields) AND
                             // get rid of obj._clean which isn't meant to be returned to the user
-                            if( options.children)  self._deleteUcFieldsAndCleanfromChildren( _children );
+                            if( options.children) self._deleteUcFieldsAndCleanfromChildren( _children );
                             delete obj._clean;
 
                             // If options.delete is on, then remove a field straight after fetching it
@@ -462,93 +490,98 @@ var MongoMixin = declare( null, {
 
 
           cursor.toArray( function( err, queryDocs ){
-            if( err ){
-             cb( err );
-            } else {
+            if( err ) return cb( err );
+          
+            cursor.count( function( err, grandTotal ){
+              if( err ) return cb( err );
+              
+              cursor.count( { applySkipLimit: true }, function( err, total ){
+                if( err ) return cb( err );
+              
+                // Cycle to work out the toDelete array _and_ get rid of the _id_
+                // from the resultset
+                /*
+                var toDelete = [];
+                queryDocs.forEach( function( doc ){
+                  if( options.delete ) toDelete.push( doc._id );
+                  if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                });
+                */
 
-              cursor.count( function( err, grandTotal ){
-                if( err ){
-                  cb( err );
-                } else {
+                console.log("QUERYDOCS: ", queryDocs );
 
-                  cursor.count( { applySkipLimit: true }, function( err, total ){
-                    if( err ){
-                      cb( err );
-                    } else {
+                var toDelete = [];
+                var changeFunctions = [];
+                // Validate each doc, running a validate function for each one of them in parallel
+                queryDocs.forEach( function( doc, index ){
 
-                      // Cycle to work out the toDelete array _and_ get rid of the _id_
-                      // from the resultset
-                      var toDelete = [];
-                      queryDocs.forEach( function( doc ){
-                        if( options.delete ) toDelete.push( doc._id );
-                        if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+                  // Mark this as one to be deleted at the end
+                  if( options.delete ) toDelete.push( doc._id );
+
+                  // Mongo will return _id: if it's not in the schema, zap it
+                  if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+                  // We will need this later if option.children was true, as
+                  // schema.validate() will wipe it
+                  if( options.children ) var _children = doc._children;
+                  var clean = doc._clean;
+
+                  changeFunctions.push( function( callback ){
+                    self.schema.validate( doc, { deserialize: true }, function( err, validatedDoc, errors ){
+                      if( err ) return callback( err );
+                      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+
+                      // Re-add children, since it may be required later and was zapped by
+                      // schema.validate()
+                      if( options.children) validatedDoc._children = _children;
+
+                      // If the object isn't clean, then it will trigger the _completeRecord
+                      // call which will effectively complete the record with the right _children
+                      var skip = clean || ! options.children;
+                      self.cleanRecord( validatedDoc, skip, function( err ){
+                        if( err ) return callback( err );
+
+                        // Note: at this point, _children might be either the old existing one,
+                        // or a new copy created by _cleanRecord
+                        // At this point, sort out _children (which might get deleted
+                        // altogether or might need extra _uc__ fields) AND
+                        // get rid of obj._clean which isn't meant to be returned to the user
+                        if( options.children) self._deleteUcFieldsAndCleanfromChildren( _children );
+                        delete validatedDoc._clean;
+
+                        //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+                        queryDocs[ index ] = validatedDoc;
+                         
+
+                        callback( null );
                       });
 
-                      var changeFunctions = [];
-                      // Validate each doc, running a validate function for each one of them in parallel
-                      queryDocs.forEach( function( doc, index ){
-
-                        // We will need this later if option.children was true, as
-                        // schema.validate() will wipe it
-                        if( options.children ) var _children = doc._children;
-                        var clean = doc._clean;
-
-                        changeFunctions.push( function( callback ){
-                          self.schema.validate( doc, { deserialize: true }, function( err, validatedDoc, errors ){
-                            if( err ) return callback( err );
-                            //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-
-                            // Re-add children, since it may be required later and was zapped by
-                            // schema.validate()
-                            if( options.children) validatedDoc._children = _children;
-
-                            // If the object isn't clean, then it will trigger the _completeRecord
-                            // call which will effectively complete the record with the right _children
-                            var skip = clean || ! options.children;
-                            self._cleanRecord( validatedDoc, skip, function( err ){
-                              if( err ) return callback( err );
-
-                              // Note: at this point, _children might be either the old existing one,
-                              // or a new copy created by _cleanRecord
-                              // At this point, sort out _children (which might get deleted
-                              // altogether or might need extra _uc__ fields) AND
-                              // get rid of obj._clean which isn't meant to be returned to the user
-                              if( options.children) self._deleteUcFieldsAndCleanfromChildren( _children );
-                              delete validatedDoc._clean;
-
-                              //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-                              queryDocs[ index ] = validatedDoc;
-                               
-
-                              callback( null );
-                            });
-
-                          });
-                        });
-                      });
-
-                      // If it was a delete, delete each record
-                      // Note that there is no check whether the delete worked or not
-                      if( options.delete ){
-                        toDelete.forEach( function( _id ){
-                          self.collection.remove( { _id: _id }, function( err ){ } );
-                        });
-                      }
- 
-                      async.parallel( changeFunctions, function( err ){
-                        if( err ) return cb( err );
-
-                        // That's all!
-                        cb( null, queryDocs, total, grandTotal );
-                      });
-
-                    };
+                    });
                   });
+                });
 
-                };
+                // If it was a delete, delete each record
+                // Note that there is no check whether the delete worked or not
+                if( options.delete ){
+                  toDelete.forEach( function( _id ){
+                    self.collection.remove( { _id: _id }, function( err ){ } );
+                  });
+                }
+
+                async.parallel( changeFunctions, function( err ){
+                  if( err ) return cb( err );
+
+                  // That's all!
+                  cb( null, queryDocs, total, grandTotal );
+                });
+
+              
               });
 
-            };
+
+            });
+
+          
           })
 
         }
@@ -729,7 +762,6 @@ var MongoMixin = declare( null, {
       self._completeRecord( record, function( err, recordWithLookups ){
         if( err ) return cb( err );
      
-        var recordWithLookups = record;
         consolelog( rnd, "recordWithLookups is:", recordWithLookups);
 
         // Every record in Mongo MUST have an _id field. Note that I do this here
@@ -738,7 +770,7 @@ var MongoMixin = declare( null, {
         // have _id
         if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = ObjectId();
 
-        recordWithLookups._clean = false;
+        recordWithLookups._clean = true;
 
         consolelog( rnd, "record with _id added:", record );
         consolelog( rnd, "ADDING:", recordWithLookups );
@@ -1374,7 +1406,7 @@ var MongoMixin = declare( null, {
       function( recordKey, cb ){
       
         //consolelog( rnd, "Checking that field", recordKey, "is actually a lookup table...");
-        // ...and that it's define in the record itself (it might be a partial update)
+        // ...and that it's defined in the record itself (it might be a partial update)
         //if( ! self.lookupChildrenTablesHash[ recordKey ] ){
         if( ! self.lookupChildrenTablesHash[ recordKey ] || typeof( record[ recordKey ] ) === 'undefined' ){
           //consolelog( rnd, "It isn't! Ignoring it...");
@@ -1787,7 +1819,7 @@ var MongoMixin = declare( null, {
             }
             var selector = { $and: [ { _clean: true }, mongoParameters.querySelector ] }
 
-            console.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!GOT HERE...", selector );
+            //console.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!GOT HERE...", selector );
 
             // Make up parameters from the passed filters
             try {
