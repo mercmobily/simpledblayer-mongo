@@ -270,7 +270,7 @@ var MongoMixin = declare( null, {
 
     var self = this;
 
-    console.log("*******CLEANRECORD CALLED! OBJECT, SKIP", obj, skip );
+    consolelog("*******CLEANRECORD CALLED! OBJECT, SKIP", obj, skip );
 
     // If skip, then don't do anything
     if( skip ) return cb( null, obj );
@@ -389,8 +389,8 @@ var MongoMixin = declare( null, {
     saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
 
     // Skipping/limiting according to ranges/limits
-    if( saneRanges.from != 0 )  cursor.skip( saneRanges.from );
-    if( saneRanges.limit != 0 ) cursor.limit( saneRanges.limit );
+    if( saneRanges.skip )  cursor.skip( saneRanges.skip );
+    if( saneRanges.limit ) cursor.limit( saneRanges.limit );
 
     // Sort the query
     cursor.sort( mongoParameters.sortHash , function( err ){
