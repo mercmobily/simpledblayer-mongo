@@ -1935,6 +1935,8 @@ MongoMixin.makeId = function( id, cb ){
   }
 };
 
+debugger;
+
 MongoMixin.registry = {};
 exports = module.exports = MongoMixin;
 
