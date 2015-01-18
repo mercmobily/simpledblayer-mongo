@@ -14,6 +14,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 var 
   dummy
 
+, path = require('path')
 , declare = require('simpledeclare')
 , SimpleSchema = require('simpleschema')
 , SimpleSchemaMongo = require('simpleschema-mongo')
@@ -35,7 +36,8 @@ var commonSchema = new SchemaMixin( {
 });
 
 
-var simpledblayerTests = require( "./lib/simpledblayer/test.js" );
+var me = path.dirname( require.resolve( 'simpledblayer' ) );
+var simpledblayerTests = require( me + "/test.js" );
 
 var tests = simpledblayerTests.get(
 
