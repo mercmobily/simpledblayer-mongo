@@ -132,13 +132,13 @@ var MongoMixin = declare( null, {
 
     endsWith: function( a, b ){
       var r = {};
-      r[ a ] = new RegExp('.*' + v + '$' );
+      r[ a ] = new RegExp('.*' + b + '$' );
       return r;
     },
 
     contains: function( a, b ){
       var r = {};
-      r[ a ] =  new RegExp('^.*' + v + '.*$' );
+      r[ a ] =  new RegExp('^.*' + b + '.*$' );
       return r;
     }
 
@@ -154,9 +154,9 @@ var MongoMixin = declare( null, {
     }
   },
     
-  // Converts `conditions` to a workable mongo filters. Most of the complexity of thi
+  // Converts `conditions` to a workable mongo filters. Most of the complexity of this
   // function is due to the fact that it deals with the presence of `fieldPrefix` (in case
-  // a child field is being modified, which will imply adding _children. to it) and
+  // a child field is being modified, which will imply adding '_children.' to it) and
   // the presence of `selectorWithoutBells` (necessary for `$pull` operation in children)
   _makeMongoFilter: function( conditions, fieldPrefix, selectorWithoutBells ){
 
@@ -244,7 +244,7 @@ var MongoMixin = declare( null, {
       if( self._searchableHash[ searchableHashEntry ] || field === self.positionBaseField ){
        
         // Add prefix to the field
-        field = this._addPrefix( field, fieldPredix );
+        field = this._addPrefix( field, fieldPrefix );
 
         // Check that it's searchable -- if not, it's not sortble either
         if( !self._searchableHash[ field ] ){
@@ -304,7 +304,7 @@ var MongoMixin = declare( null, {
     // Update record so that it's marked as "dirty"
     var updateQuery = {};
     updateQuery[ self.idProperty ] = obj[ self.idProperty ];
-    console.log("DOING: ", updateQuery );
+    consolelog("DOING: ", updateQuery );
     self.collection.update( updateQuery, { $set: { _clean: false } }, { multi: false }, cb );
   },
 
@@ -353,13 +353,13 @@ var MongoMixin = declare( null, {
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
-    console.log("TABLE:", self.table );
-    console.log("OPTIONS", options );
-    console.log("FILTERS", filters );
+    consolelog("TABLE:", self.table );
+    consolelog("OPTIONS", options );
+    consolelog("FILTERS", filters );
 
-    console.log("SORT HASH", mongoParameters.sortHash );
-    console.log( Object.keys( mongoParameters.sortHash ).length );
-    console.log( self.positionField );
+    consolelog("SORT HASH", mongoParameters.sortHash );
+    consolelog( Object.keys( mongoParameters.sortHash ).length );
+    consolelog( self.positionField );
 
     if( Object.keys( mongoParameters.sortHash ).length === 0 && self.positionField ){
       mongoParameters.sortHash[ self.positionField ] = 1;
@@ -390,7 +390,7 @@ var MongoMixin = declare( null, {
 
     // Skipping/limiting according to ranges/limits
     if( saneRanges.skip )  cursor.skip( saneRanges.skip );
-    if( saneRanges.limit ) cursor.limit( saneRanges.limit );
+    if( saneRanges.limit ) cursor.limit( saneRanges.limit ); 
 
     // Sort the query
     cursor.sort( mongoParameters.sortHash , function( err ){
@@ -541,7 +541,7 @@ var MongoMixin = declare( null, {
               });
               */
 
-              console.log("QUERYDOCS: ", queryDocs );
+              consolelog("QUERYDOCS: ", queryDocs );
 
               var toDelete = [];
               var changeFunctions = [];
@@ -629,6 +629,12 @@ var MongoMixin = declare( null, {
     var self = this;
 
     var unsetObject = {};
+
+    // This is such a common mistake, I will make thins work and give out a warning
+    if( conditions.conditions ){
+      console.warn( "(In update) update and delete methods only accept conditions, not filters. Refer to documentation of SimpleDbLayer. This query will still work, but possibly not as expected (ranges and limits are not applied)" );
+      conditions = conditions.conditions;
+    }
 
     // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
     var filters = { conditions: conditions };
@@ -874,12 +880,18 @@ var MongoMixin = declare( null, {
 
     var self = this;
 
+    // This is such a common mistake, I will make thins work and give out a warning
+    if( conditions.conditions ){
+      console.warn( "(In delete) update and delete methods only accept conditions, not filters. Refer to documentation of SimpleDbLayer. This query will still work, but possibly not as expected (ranges and limits are not applied)" );
+      conditions = conditions.conditions;
+    }
+
     // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
     var filters = { conditions: conditions };
 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: delete for ", self.table, ' => ', filters );
+    consolelog( rnd, "ENTRY: delete for ", self.table, ' => ', require('util').inspect( filters, { depth: 10 }  ) );
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -896,7 +908,7 @@ var MongoMixin = declare( null, {
       return cb( e );
     }
 
-    console.log("DELETE SELECTOR: ", mongoParameters.querySelector );
+    consolelog("DELETE SELECTOR: ", mongoParameters.querySelector );
     // If options.multi is off, then use findAndModify which will accept sort
     if( !options.multi ){
       self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
@@ -919,7 +931,7 @@ var MongoMixin = declare( null, {
     } else {
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
 
-        console.log("TOTAL FOR SELECTOR: ", total, mongoParameters.querySelector );
+        consolelog("TOTAL FOR SELECTOR: ", total, mongoParameters.querySelector );
   
         self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
           if( err ) return cb( err );
@@ -1258,8 +1270,7 @@ var MongoMixin = declare( null, {
         }
       } else {
         self._deleteUcFields( child );
-        delete child[ i ]._clean;
-
+        delete child._clean;
       }
     };
   },
