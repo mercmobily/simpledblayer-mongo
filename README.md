@@ -16,18 +16,3 @@ If a record is "dirty", the cache will be re-generated on the fly whenever a rec
 
 Unfortunately, doing a mass-update on a table with children in a 1:n relationship is not allowed because of [MongoDB bug #1243](https://jira.mongodb.org/browse/server-1243), which prevents multuple update in cache from working (the `$` positional operator won't work for sub-arrays).
 
-## Running tests
-
-### GIT users
-
-If you got this package with Git, to run tests make sure you run first:
-
-    git submodule init
-    git submodule update 
-
-This will get the list of tests from the main simpledblayer module, making the `test.js` file workable.
-
-
-### NPM users
-
-If you got this package via NPM, ( Working on it, sorry -- Merc. )
