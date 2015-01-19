@@ -19,10 +19,8 @@ var
 , SimpleSchema = require('simpleschema')
 , SimpleSchemaMongo = require('simpleschema-mongo')
 , SimpleDbLayer = require('simpledblayer')
-
+, mongo = require('mongodb')
 , MongoMixin = require('./MongoMixin.js')
-
-, mw = require('mongowrapper')
 ;
 
 var SchemaMixin = declare( [ SimpleSchema, SimpleSchemaMongo ] );
@@ -41,7 +39,7 @@ var simpledblayerTests = require( me + "/test.js" );
 var tests = simpledblayerTests.get(
 
   function getDbInfo( done ) {
-    mw.connect('mongodb://localhost/tests', {}, function( err, db ){
+    mongo.MongoClient.connect('mongodb://localhost/tests', {}, function( err, db ){
       if( err ){
         throw new Error("MongoDB connect: could not connect to database");
       } else {

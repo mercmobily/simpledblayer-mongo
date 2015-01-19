@@ -12,20 +12,17 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 var 
   dummy
 
-, declare = require('simpledeclare')
-, mongoWrapper = require('mongowrapper')
-, async = require('async')
+, declare = require( 'simpledeclare' )
+, async = require( 'async' )
 , debug = require( 'debug' )
-
-, ObjectId = mongoWrapper.ObjectId
-, checkObjectId = mongoWrapper.checkObjectId
+, mongo = require( 'mongodb' )
 ;
-
-
 
 var consolelog = debug( 'simpledblayer:mongo');
 
-
+function ObjectId( id ){
+  return ( id instanceof mongo.ObjectID) ? id : mongo.ObjectID( id );
+}
 
 function _makeOperator( op ){
   return function( a, b ){
