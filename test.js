@@ -25,7 +25,6 @@ var
 , mw = require('mongowrapper')
 ;
 
-
 var SchemaMixin = declare( [ SimpleSchema, SimpleSchemaMongo ] );
 
 var commonSchema = new SchemaMixin( {
@@ -62,7 +61,7 @@ var tests = simpledblayerTests.get(
 
       "mongo prep": function( test ){
 
-        g.mongoPeople = new g.Layer( 'mongoPeople', {  schema: commonSchema, idProperty: 'name' } );
+        g.mongoPeople = new g.Layer( {  table: 'mongoPeople', schema: commonSchema, idProperty: 'name' } );
         test.ok( g.mongoPeople );
         test.done();
       },
@@ -84,13 +83,13 @@ var tests = simpledblayerTests.get(
          g.mongoPeople.insert( person, function( err, personReturned ){
            test.ifError( err );
 
-           g.mongoPeople.update( { conditions: { and: [ { field: 'name', type: 'is', value: 'Tory' } ] } }, { surname: "Me"  }, function( err, howMany ){
+           g.mongoPeople.update( { name: 'eq', args: [ 'name', 'Tory' ] }, { surname: "Me"  }, function( err, howMany ){
              test.equal( howMany, 1 );
            
              g.mongoPeople.makeId( null, function( err, id ){
                test.equal( typeof( id ), 'object' );
 
-               g.mongoPeople.update( { conditions: { and: [ { field: 'name', type: 'is', value: 'Tory' } ] } }, { _id: id  }, function( err, howMany ){ 
+               g.mongoPeople.update( { name: 'eq', args: [ 'name', 'Tory' ] }, { _id: id  }, function( err, howMany ){ 
                  test.equal( typeof( err ), 'object' ); 
 
                  test.done();
@@ -104,7 +103,7 @@ var tests = simpledblayerTests.get(
       
       "indexing": function( test ){
    
-        SimpleDbLayer.getLayer('peopleR').generateSchemaIndexes( {}, function( err ){
+        g.Layer.getLayer('peopleR').generateSchemaIndexes( {}, function( err ){
  
         //g.mongoPeople.generateSchemaIndexes( {}, function( err ){
           //console.log("HUMMMM", SimpleDbLayer.getAllLayers() );
@@ -112,11 +111,7 @@ var tests = simpledblayerTests.get(
         });
       }
 
-    }
-
-
-   
-
+    }   
   }
 
 );
