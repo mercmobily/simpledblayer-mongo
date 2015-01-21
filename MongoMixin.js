@@ -24,6 +24,8 @@ function ObjectId( id ){
   return ( id instanceof mongo.ObjectID) ? id : mongo.ObjectID( id );
 }
 
+//Differenciation BW TingoDb and MongoDB starts here
+
 function _makeOperator( op ){
   return function( a, b ){
     var r = {};
@@ -561,7 +563,7 @@ var MongoMixin = declare( null, {
 
                     if( err ) return callback( err );
                     if( self.strictSchemaOnFetch && errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-                   
+
                     // Re-add children, since it may be required later and was zapped by
                     // schema.validate()
                     if( options.children) validatedDoc._children = _children;
