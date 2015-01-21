@@ -23,7 +23,7 @@ var
 
 var consolelog = debug( 'simpledblayer:mongo');
 
-function ObjectId( id ){
+function makeObjectId( id ){
   return ( id instanceof mongo.ObjectID) ? id : mongo.ObjectID( id );
 }
 
@@ -771,8 +771,7 @@ var MongoMixin = declare( null, {
   insert: function( record, options, cb ){
 
     var self = this;
-    var recordWithLookups = {};
-
+ 
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
     consolelog( rnd, "ENTRY: insert for ", self.table, ' => ', record );
@@ -814,7 +813,7 @@ var MongoMixin = declare( null, {
         // so that record doesn't include an _id field when self._makeRecordWithLookups
         // is called (which would imply that $pushed, non-main children elements would also
         // have _id
-        if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = ObjectId();
+        if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = makeObjectId();
 
         recordWithLookups._clean = true;
 
@@ -977,8 +976,6 @@ var MongoMixin = declare( null, {
     var conditionsHash = {};
     var id = record[ idProperty ];
 
-    var updateCalls = [];
-
     // Make up conditionsHash based on the positionBase array
     conditionsHash = { name: 'and', args: [] };
     for( var i = 0, l = self.positionBase.length; i < l; i ++ ){
@@ -1115,7 +1112,7 @@ var MongoMixin = declare( null, {
   generateSchemaIndexes: function( options, cb ){
 
     var self = this;
-    var indexMakers = [];
+    
     //var allIndexes = {};
     var allIndexes = [];
 
@@ -1298,12 +1295,9 @@ var MongoMixin = declare( null, {
   },
 
    _deleteUcFields: function( record ){
-    var self = this;
-
     for( var k in record ){
       if( k.substr( 0, 6 ) === '__uc__' ) delete record[ k ];
     }
-
   },
 
  
@@ -1349,8 +1343,8 @@ var MongoMixin = declare( null, {
 
         var childTableData = self.multipleChildrenTablesHash[ recordKey ];
 
-        var childLayer = childTableData.layer;
-        var nestedParams = childTableData.nestedParams;
+        //var childLayer = childTableData.layer;
+        //var nestedParams = childTableData.nestedParams;
 
         consolelog( rnd, "Working on ", childTableData.layer.table );
         consolelog( rnd, "Getting children data (multiple) in child table ", childTableData.layer.table, "for record", recordWithLookups );
@@ -1359,9 +1353,6 @@ var MongoMixin = declare( null, {
         // ROOT to _getChildrenData
         self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
           if( err ) return cb( err );
-
-          // childLayer._addUcFields( childData );
-          // childData._children = {};
 
           consolelog( rnd, "The childData data is:", childData );
 
@@ -1734,7 +1725,7 @@ var MongoMixin = declare( null, {
 
             parentLayer.collection.update( mongoSelector, updateObject, function( err, total ){
               if( err ) return cb( err );
-
+              if( total === 0 ) return cb( new Error("Record not found while adding entry to child table") );
               consolelog( rnd, "Record inserted in sub-array" );
 
               cb( null );
@@ -1988,9 +1979,9 @@ var MongoMixin = declare( null, {
 // The default id maker
 MongoMixin.makeId = function( id, cb ){
   if( id === null ){
-    cb( null, ObjectId() );
+    cb( null, makeObjectId() );
   } else {
-    cb( null, ObjectId( id ) );
+    cb( null, makeObjectId( id ) );
   }
 };
 
