@@ -483,13 +483,13 @@ var MongoMixin = declare( null, {
                     // Note that after this call obj._children may or may not get
                     // overwritten (depends wheter _cleanRecord gets skipped).
                     var skip = !options.children || clean; 
-                    self.cleanRecord( obj, skip, function( err ){
+                    self.cleanRecord( obj, skip, function( err, obj ){
                       if( err ) return done( err );
 
                       // Note: at this point, _children might be either the old existing one,
                       // or a new copy created by _cleanRecord
                       // At this point, sort out _children (which might get deleted
-                      // altogether or might need extra _uc__ fields) AND
+                      // altogether or might have extra _uc__ fields) AND
                       // get rid of obj._clean which isn't meant to be returned to the user
                       if( options.children) self._deleteUcFieldsAndCleanfromChildren( _children );
                       delete obj._clean;
@@ -578,13 +578,13 @@ var MongoMixin = declare( null, {
                     // If the object isn't clean, then it will trigger the _completeRecord
                     // call which will effectively complete the record with the right _children
                     var skip = clean || ! options.children;
-                    self.cleanRecord( validatedDoc, skip, function( err ){
+                    self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                       if( err ) return callback( err );
 
                       // Note: at this point, _children might be either the old existing one,
                       // or a new copy created by _cleanRecord
                       // At this point, sort out _children (which might get deleted
-                      // altogether or might need extra _uc__ fields) AND
+                      // altogether or might have extra _uc__ fields) AND
                       // get rid of obj._clean which isn't meant to be returned to the user
                       if( options.children) self._deleteUcFieldsAndCleanfromChildren( _children );
                       delete validatedDoc._clean;
@@ -592,7 +592,6 @@ var MongoMixin = declare( null, {
                       //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
                       queryDocs[ index ] = validatedDoc;
                        
-
                       callback( null );
                     });
 
