@@ -919,7 +919,8 @@ var MongoMixin = declare( null, {
     }
 
     consolelog("DELETE SELECTOR: ", mongoParameters.querySelector );
-    // If options.multi is off, then use findAndModify which will accept sort
+    // If options.multi is off, then use findAndModify which will give us the ID of the modify one (which
+    // will be passed to _updateParentRecords)
     if( !options.multi ){
       self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
         if( err ) return cb( err );
@@ -937,7 +938,8 @@ var MongoMixin = declare( null, {
         }
       });
 
-    // If options.multi is on, then "sorting" doesn't make sense, it will just use mongo's "remove"
+    // If options.multi is on, then simply use `remove`, as _updateParentsRecords will simply get
+    // the filters as parameter
     } else {
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
 
