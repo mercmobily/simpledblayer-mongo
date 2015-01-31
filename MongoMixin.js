@@ -1589,7 +1589,7 @@ var MongoMixin = declare( Object, {
           if( err ) return cb( err );
 
           var deleteId = typeof( childTableData.layer._fieldsHash._id ) === 'undefined';
-          res.map( function( item ) {
+          res.forEach( function( item ) {
             if( deleteId ) delete item._id;
             delete item._clean;
           });
