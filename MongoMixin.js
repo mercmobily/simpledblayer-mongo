@@ -114,6 +114,9 @@ var MongoMixin = declare( Object, {
 
   _operators: {
 
+    ne: _makeOperator( '$ne' ),
+
+
     lt: _makeOperator( '$lt' ),
     gt: _makeOperator( '$gt' ),
 
