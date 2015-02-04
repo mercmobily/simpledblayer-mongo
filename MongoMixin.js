@@ -151,7 +151,7 @@ var MongoMixin = declare( Object, {
   // an SQL creator for a SQL layer
   _makeMongoParameters: function( filters, fieldPrefix, selectorWithoutBells ){
     return  {
-      querySelector: this._makeMongoFilter( filters.conditions || {}, fieldPrefix, selectorWithoutBells ),
+      querySelector: this._makeMongoConditions( filters.conditions || {}, fieldPrefix, selectorWithoutBells ),
       sortHash:  this._makeMongoSortHash( filters.sort || {}, fieldPrefix )
     };
   },
@@ -160,7 +160,7 @@ var MongoMixin = declare( Object, {
   // function is due to the fact that it deals with the presence of `fieldPrefix` (in case
   // a child field is being modified, which will imply adding '_children.' to it) and
   // the presence of `selectorWithoutBells` (necessary for `$pull` operation in children)
-  _makeMongoFilter: function( conditions, fieldPrefix, selectorWithoutBells ){
+  _makeMongoConditions: function( conditions, fieldPrefix, selectorWithoutBells ){
 
     //consolelog("FILTERS IN MONGO MIXIN: " );
     //consolelog( require('util').inspect( filters, {depth: 10 }) );
@@ -180,7 +180,7 @@ var MongoMixin = declare( Object, {
       // The content of the $and key will be the result of makeMongo
       var r = {};
       r[ mongoName ] = conditions.args.map( function( item ){
-        return self._makeMongoFilter( item, fieldPrefix, selectorWithoutBells );
+        return self._makeMongoConditions( item, fieldPrefix, selectorWithoutBells );
       });
       return r;
 
