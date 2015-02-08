@@ -356,47 +356,7 @@ var MongoMixin = declare( Object, {
     );
   },
 
-  selectById: function( id, options, cb ){
-    
-    if( typeof( options ) === 'function' ){
-      cb = options;
-      options = {};
-    }
-
-    var conditions = {};
-    conditions[ this.idProperty ] = id;
-
-    this.select( { conditions: conditions }, options, function( err, docs ){
-      if( err ) return cb( err );
-
-      if( ! docs.length ) return cb( null, null );
-      cb( null, docs[ 0 ] );
-    });
-  },
-
-  selectByHash: function( filters, options, cb ){
-
-    //console.log("SELECTHASH: ", filters.conditions );
-    var o;
-    var conditions = filters.conditions || {};
-    var keys = Object.keys( conditions );
-
-    if( keys.length === 0 ){
-      o = {};
-    } else if( keys.length === 1 ){
-      var key = keys[ 0 ];
-      o = { name: 'eq', args: [ key, conditions[ key ] ] };
-    } else {
-      o = { name: 'and', args: [] };
-      keys.forEach( function( key ){
-        o.args.push( { name: 'eq', args: [ key, conditions[ key ] ] } );
-      });
-    }
-
-    //console.log("CONVERTED CONDITIONS: ", require('util').inspect( o, { depth: 10 }  ) );
-    this.select( { conditions: o, ranges: filters.ranges, sort: filters.sort }, options, cb );
-  },
-
+  
   select: function( filters, options, cb ){
 
     var self = this;
@@ -706,44 +666,7 @@ var MongoMixin = declare( Object, {
 
   },
 
-  updateById: function( id, updateObject, options, cb ){
-    
-    if( typeof( options ) === 'function' ){
-      cb = options;
-      options = {};
-    }
-
-    var conditions = {};
-    conditions[ this.idProperty ] = id;
-    options.multi = false;
-
-    this.update( conditions, updateObject, options, cb );
-  },
-
-  updateByHash: function( conditions, updateObject, options, cb ){
-
-    //console.log("SELECTHASH: ", filters.conditions );
-    var o;
-    var keys = Object.keys( conditions );
-
-    if( keys.length === 0 ){
-      o = {};
-    } else if( keys.length === 1 ){
-      var key = keys[ 0 ];
-      o = { name: 'eq', args: [ key, conditions[ key ] ] };
-    } else {
-      o = { name: 'and', args: [] };
-      keys.forEach( function( key ){
-        o.args.push( { name: 'eq', args: [ key, conditions[ key ] ] } );
-      });
-    }
-
-    //console.log("CONVERTED CONDITIONS: ", require('util').inspect( o, { depth: 10 }  ) );
-    this.update( o, updateObject, options, cb );
-  },
-
-
-
+  
   update: function( conditions, updateObject, options, cb ){
 
     var self = this;
