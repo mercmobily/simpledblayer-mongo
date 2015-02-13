@@ -11,7 +11,6 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-
 var
   dummy
 
@@ -306,16 +305,26 @@ var MongoMixin = declare( Object, {
     self._completeRecord( obj, function( err, obj ){
       if( err ) return cb( err );
 
+      // Temporarily add UcFields and _clean, since about to do update
+      // NOTE: it's IMPORTANT to pass all fields to the update, because
+      // the change in the schema could just be that a string field has
+      // become searchable.
       self._addUcFields( obj );
       obj._clean = true;
 
-      // Update record so that it's marked as "clean"
+      // Update record. Note that the record will be the exact same as it was, except:
+      // - _clean is true
+      // - UC fields are added (as they should be)
+      // - _children is populated by _completeRecord
       var updateQuery = {};
       updateQuery[ self.idProperty ] = obj[ self.idProperty ];
       self.collection.update( updateQuery, { $set: obj }, { multi: false }, function( err, total ){
         if( err ) return cb( err );
         if( !total ) return cb( new Error("Record to be cleared not found") );
 
+        // Delete UcFields and _clean since returning the object
+        // Note that there is no point in cleaning up the children, since
+        // _completeRecord takes care of it.
         delete obj._clean;
         self._deleteUcFields( obj );
 
@@ -364,8 +373,6 @@ var MongoMixin = declare( Object, {
     var self = this;
     var saneRanges;
 
-
-
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
       cb = options;
@@ -374,9 +381,8 @@ var MongoMixin = declare( Object, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    
-    var mongoParameters;
     // Make up parameters from the passed filters
+    var mongoParameters;
     try {
       mongoParameters = this._makeMongoParameters( filters );
     } catch( e ){
@@ -617,13 +623,14 @@ var MongoMixin = declare( Object, {
 
                     // If the object isn't clean, then it will trigger the _completeRecord
                     // call which will effectively complete the record with the right _children
+                    // and add any UC fields needed
                     var skip = clean || !( options.children || self.fetchChildrenByDefault );
                     self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                       if( err ) return callback( err );
 
                       // Note: at this point, _children might be either the old existing one,
                       // or a new copy created by _cleanRecord
-                      // At this point, sort out _children AND
+                      // Sort out _children AND
                       // get rid of obj._clean which isn't meant to be returned to the user
                       if( options.children || self.fetchChildrenByDefault )
                         self._deleteUcFieldsAndCleanfromChildren( _children );
@@ -766,11 +773,18 @@ var MongoMixin = declare( Object, {
 
             if( doc ){
 
-              // MONGO: Change parents so that the one record is updated
+              // Change parents so that the one record is updated
               self._updateParentsRecords( { op: 'updateOne', id: doc[ self.idProperty ], updateObject: updateObject, unsetObject: unsetObject }, function( err ){
                 if( err ) return cb( err );
 
-                cb( null, 1 );
+                // Getting the full record so that I can emit
+                // TODO: Update the API, so that a single update also returns the fullRecord
+                self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
+                  if( err ) return cb( err );
+
+                  self.emit( 'updateOne', fullRecord, conditions, updateObject, options );
+                  cb( null, 1, fullRecord );
+                })
               });
             } else {
               cb( null, 0 );
@@ -787,6 +801,8 @@ var MongoMixin = declare( Object, {
             // MONGO: Change parents
             self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
               if( err ) return cb( err );
+
+              self.emit( 'updateMany', conditions, updateObject, options );
 
               cb( null, total );
             });
@@ -895,34 +911,15 @@ var MongoMixin = declare( Object, {
               self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
                 if( err ) return cb( err );
 
-                if( ! options.returnRecord ) return cb( null );
-
-                // The insert operation might actually return a record (if returnRecord is on).
-                // In this case, projectionHash will need to also have _children in order to
-                // return the actual record with its _children
-                var projectionHash = {};
-                if( ! ( options.children || self.fetchChildrenByDefault ) ){
-                  projectionHash = self._projectionHash;
-                } else {
-                  for( var k in self._projectionHash ){
-                    if( !self._projectionHash.hasOwnProperty( k ) ) continue;
-                    projectionHash[ k ] = self._projectionHash[ k ];
-                  }
-                  projectionHash._children = true;
-                }
-
-                self.collection.findOne( { _id: recordWithLookups._id }, projectionHash, function( err, doc ){
+                // Re-fetch the record using the API
+                self.selectById( record[ self.idProperty ], function( err, fetchedRecord ){
                   if( err ) return cb( err );
 
-                  // Clean up doc
-                  if( doc !== null ){
-                    if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-                    delete doc._clean;
-                    self._deleteUcFieldsAndCleanfromChildren( doc._children );
-                  }
-
-                  cb( null, doc );
-                });
+                  // Emit the insert event
+                  self.emit( 'insert', fetchedRecord, record, options );
+                
+                  return cb( null, fetchedRecord );
+                })
               });
             });
           });
@@ -957,38 +954,50 @@ var MongoMixin = declare( Object, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    // Run the query
-    var mongoParameters;
-    try {
-      mongoParameters = this._makeMongoParameters( filters );
-    } catch( e ){
-      return cb( e );
-    }
-
-    consolelog("DELETE SELECTOR: ", mongoParameters.querySelector );
     // If options.multi is off, then use findAndModify which will give us the ID of the modify one (which
     // will be passed to _updateParentRecords)
     if( !options.multi ){
-      self.collection.findAndRemove( mongoParameters.querySelector, mongoParameters.sortHash, function( err, doc ) {
+
+      // Not a multple delete: limit it to one
+      filters.ranges = { limit: 1 };
+
+      // Fetch the record that is about to be deleted, with `delete` option on
+      self.select( filters, { delete: true }, function( err, fetchedRecords ){
         if( err ) return cb( err );
 
-        if( doc ){
+        // Nothing is there: call callback with 0
+        if( fetchedRecords.length === 0 ) return cb( null, 0 );
 
-          self._updateParentsRecords( { op: 'deleteOne', id: doc[ self.idProperty ] }, function( err ){
-            if( err ) return cb( err );
+        // The first item is the one that will get deleted
+        var fetchedRecord = fetchedRecords[ 0 ];
 
-            cb( null, 1 );
-          });
+        self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
+          if( err ) return cb( err );
 
-        } else {
-          cb( null, 0 );
-        }
-      });
+          self.emit( 'deleteOne', fetchedRecord, conditions, options );
+
+          // Call callback with 1, the number of deleted records
+          // TODO: Update API so that it's clear that fetched record is returned
+          cb( null, 1, fetchedRecord );
+        });
+      })
 
     // If options.multi is on, then simply use `remove`, as _updateParentsRecords will simply get
     // the filters as parameter
     } else {
+
+      // Make up the query for remove
+      var mongoParameters;
+      try {
+        mongoParameters = this._makeMongoParameters( filters );
+      } catch( e ){
+        return cb( e );
+      }
+      consolelog("DELETE SELECTOR: ", mongoParameters.querySelector );
+      
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
+
+        self.emit( 'deleteMany', conditions, options );
 
         consolelog("TOTAL FOR SELECTOR: ", total, mongoParameters.querySelector );
 
