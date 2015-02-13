@@ -65,7 +65,7 @@ var tests = simpledblayerTests.get(
       "mongo adds _id field": function( test ){
 
          var person = { name: "Joe", surname: "Mitchell", age: 48 };
-         g.mongoPeople.insert( person, { returnRecord: true }, function( err, personReturned ){
+         g.mongoPeople.insert( person, , function( err, personReturned ){
            test.ifError( err );
            test.ok( personReturned._id );
            test.notDeepEqual( person, personReturned, "Records match, but the returned one should have _id set" );
