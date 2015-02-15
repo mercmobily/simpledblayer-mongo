@@ -436,235 +436,234 @@ var MongoMixin = declare( Object, {
     if( saneRanges.limit ) cursor.limit( saneRanges.limit );
 
     // Sort the query
-    cursor.sort( mongoParameters.sortHash , function( err ){
-      if( err ) return cb( err );
+    cursor.sort( mongoParameters.sortHash );
+  
+    if( options.useCursor ){
 
-      if( options.useCursor ){
+      cursor.count( function( err, grandTotal ){
+        if( err ) return cb( err )
+
+        cursor.count( { applySkipLimit: true }, function( err, total ){
+          if( err ) return cb( err );
+
+          cb( null, {
+
+            each: function( iterator, endCallback ){
+
+              var i;
+              var self = this;
+              async.doWhilst(
+
+                function( callback ){
+
+                  self.next( function( err, element ){
+                    if( err ) return callback( err );
+
+                    i = element;
+
+                    // If the element is null, nothing to do. This will also
+                    // be the last iteration of this async.doWhilst cycle
+                    if( element === null ) return callback( null );
+
+                    iterator( element, function( err, breakFlag ){
+                      if( err ) return callback( err );
+
+                      // If breakFlag, force quitting the cycle (neatly)
+                      if( breakFlag ) i = null;
+
+                      callback( null );
+
+                    });
+                  });
+                }, 
+                function(){ return i !== null; },
+
+                function( err ) {
+                  if( err ) return endCallback( err );
+
+                  endCallback( null );
+                }
+              );
+
+            },
+
+            next: function( done ){
+
+              cursor.nextObject( function( err, obj ) {
+                if( err ) return done( err );
+
+                // Returned null: nothing to see here
+                if( obj === null ) return done( null, null );
+
+                // Mongo will return _id: if it's not in the schema, zap it
+                if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
+
+                // We will need this later if option.children was true, as
+                // schema.validate() will wipe it
+                if( options.children || self.fetchChildrenByDefault ) var _children = obj._children;
+                var clean = obj._clean;
+
+                self.schema.validate( obj, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, obj, errors ){
+
+                  // If there is an error, end of story
+                  // If validation fails, call callback with self.SchemaError
+                  if( err ) return cb( err );
+                  if( self.strictSchemaOnFetch && errors.length ){
+                    var e = new self.SchemaError( "Schema is strict and loaded data didn't match" );
+                    e.errors = errors;
+                    return cb( e );
+                  }
+
+                  // Re-add children, since it may be required later and was zapped by
+                  // schema.validate()
+                  if( options.children || self.fetchChildrenByDefault ) obj._children = _children;
+
+                  // If the object isn't clean, then it will trigger the _completeRecord
+                  // call which will effectively complete the record with the right _children
+                  // Note that after this call obj._children may or may not get
+                  // overwritten (depends wheter _cleanRecord gets skipped).
+                  var skip = !( options.children || self.fetchChildrenByDefault ) || clean;
+                  self.cleanRecord( obj, skip, function( err, obj ){
+                    if( err ) return done( err );
+
+                    // Note: at this point, _children might be either the old existing one,
+                    // or a new copy created by _cleanRecord
+                    // At this point, sort out _children (which might get deleted
+                    // altogether or might have extra _uc__ fields) AND
+                    // get rid of obj._clean which isn't meant to be returned to the user
+                    if( options.children || self.fetchChildrenByDefault )
+                      self._deleteUcFieldsAndCleanfromChildren( _children );
+                    delete obj._clean;
+
+                    // If options.delete is on, then remove a field straight after fetching it
+                    if( options.delete ){
+                      return self.collection.remove( { _id: obj._id }, done );
+                    }
+
+                    done( null, obj );
+                  });
+                });
+              });
+            },
+
+            rewind: function( done ){
+              if( options.delete ){
+                done( new Error("Cannot rewind a cursor with `delete` option on") );
+              } else {
+                cursor.rewind();
+                done( null );
+              }
+            },
+            close: function( done ){
+              cursor.close( done );
+            }
+          }, total, grandTotal );
+
+
+        });
+
+
+      });
+
+    } else {
+
+
+      cursor.toArray( function( err, queryDocs ){
+        if( err ) return cb( err );
 
         cursor.count( function( err, grandTotal ){
-          if( err ) return cb( err )
+          if( err ) return cb( err );
 
           cursor.count( { applySkipLimit: true }, function( err, total ){
             if( err ) return cb( err );
 
-            cb( null, {
+            // Cycle to work out the toDelete array _and_ get rid of the _id_
+            // from the resultset
+            /*
+            var toDelete = [];
+            queryDocs.forEach( function( doc ){
+              if( options.delete ) toDelete.push( doc._id );
+              if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+            });
+            */
 
-              each: function( iterator, endCallback ){
+            consolelog("QUERYDOCS: ", queryDocs );
 
-                var i;
-                var self = this;
-                async.doWhilst(
+            var toDelete = [];
+            var changeFunctions = [];
+            // Validate each doc, running a validate function for each one of them in parallel
+            queryDocs.forEach( function( doc, index ){
 
-                  function( callback ){
+              // Mark this as one to be deleted at the end
+              if( options.delete ) toDelete.push( doc._id );
 
-                    self.next( function( err, element ){
-                      if( err ) return callback( err );
+              // Mongo will return _id: if it's not in the schema, zap it
+              if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
 
-                      i = element;
+              // We will need this later if option.children was true, as
+              // schema.validate() will wipe it
+              if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
+              var clean = doc._clean;
 
-                      // If the element is null, nothing to do. This will also
-                      // be the last iteration of this async.doWhilst cycle
-                      if( element === null ) return callback( null );
+              changeFunctions.push( function( callback ){
+                self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
 
-                      iterator( element, function( err, breakFlag ){
-                        if( err ) return callback( err );
+                  if( err ) return callback( err );
 
-                        // If breakFlag, force quitting the cycle (neatly)
-                        if( breakFlag ) i = null;
-
-                        callback( null );
-
-                      });
-                    });
-                  }, 
-                  function(){ return i !== null; },
-
-                  function( err ) {
-                    if( err ) return endCallback( err );
-
-                    endCallback( null );
+                  if( self.strictSchemaOnFetch && errors.length ) {
+                    var e =  new self.SchemaError( "Schema is strict and loaded data didn't match");
+                    e.errors = errors;
+                    return cb( e );
                   }
-                );
 
-              },
+                  // Re-add children, since it may be required later and was zapped by
+                  // schema.validate()
+                  if( options.children || self.fetchChildrenByDefault ) validatedDoc._children = _children;
 
-              next: function( done ){
-
-                cursor.nextObject( function( err, obj ) {
-                  if( err ) return done( err );
-
-                  // Returned null: nothing to see here
-                  if( obj === null ) return done( null, null );
-
-                  // Mongo will return _id: if it's not in the schema, zap it
-                  if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
-
-                  // We will need this later if option.children was true, as
-                  // schema.validate() will wipe it
-                  if( options.children || self.fetchChildrenByDefault ) var _children = obj._children;
-                  var clean = obj._clean;
-
-                  self.schema.validate( obj, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, obj, errors ){
-
-                    // If there is an error, end of story
-                    // If validation fails, call callback with self.SchemaError
-                    if( err ) return cb( err );
-                    if( self.strictSchemaOnFetch && errors.length ){
-                      var e = new self.SchemaError( "Schema is strict and loaded data didn't match" );
-                      e.errors = errors;
-                      return cb( e );
-                    }
-
-                    // Re-add children, since it may be required later and was zapped by
-                    // schema.validate()
-                    if( options.children || self.fetchChildrenByDefault ) obj._children = _children;
-
-                    // If the object isn't clean, then it will trigger the _completeRecord
-                    // call which will effectively complete the record with the right _children
-                    // Note that after this call obj._children may or may not get
-                    // overwritten (depends wheter _cleanRecord gets skipped).
-                    var skip = !( options.children || self.fetchChildrenByDefault ) || clean;
-                    self.cleanRecord( obj, skip, function( err, obj ){
-                      if( err ) return done( err );
-
-                      // Note: at this point, _children might be either the old existing one,
-                      // or a new copy created by _cleanRecord
-                      // At this point, sort out _children (which might get deleted
-                      // altogether or might have extra _uc__ fields) AND
-                      // get rid of obj._clean which isn't meant to be returned to the user
-                      if( options.children || self.fetchChildrenByDefault )
-                        self._deleteUcFieldsAndCleanfromChildren( _children );
-                      delete obj._clean;
-
-                      // If options.delete is on, then remove a field straight after fetching it
-                      if( options.delete ){
-                        return self.collection.remove( { _id: obj._id }, done );
-                      }
-
-                      done( null, obj );
-                    });
-                  });
-                });
-              },
-
-              rewind: function( done ){
-                if( options.delete ){
-                  done( new Error("Cannot rewind a cursor with `delete` option on") );
-                } else {
-                  cursor.rewind();
-                  done( null );
-                }
-              },
-              close: function( done ){
-                cursor.close( done );
-              }
-            }, total, grandTotal );
-
-
-          });
-
-
-        });
-
-      } else {
-
-
-        cursor.toArray( function( err, queryDocs ){
-          if( err ) return cb( err );
-
-          cursor.count( function( err, grandTotal ){
-            if( err ) return cb( err );
-
-            cursor.count( { applySkipLimit: true }, function( err, total ){
-              if( err ) return cb( err );
-
-              // Cycle to work out the toDelete array _and_ get rid of the _id_
-              // from the resultset
-              /*
-              var toDelete = [];
-              queryDocs.forEach( function( doc ){
-                if( options.delete ) toDelete.push( doc._id );
-                if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-              });
-              */
-
-              consolelog("QUERYDOCS: ", queryDocs );
-
-              var toDelete = [];
-              var changeFunctions = [];
-              // Validate each doc, running a validate function for each one of them in parallel
-              queryDocs.forEach( function( doc, index ){
-
-                // Mark this as one to be deleted at the end
-                if( options.delete ) toDelete.push( doc._id );
-
-                // Mongo will return _id: if it's not in the schema, zap it
-                if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-
-                // We will need this later if option.children was true, as
-                // schema.validate() will wipe it
-                if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
-                var clean = doc._clean;
-
-                changeFunctions.push( function( callback ){
-                  self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
-
+                  // If the object isn't clean, then it will trigger the _completeRecord
+                  // call which will effectively complete the record with the right _children
+                  // and add any UC fields needed
+                  var skip = clean || !( options.children || self.fetchChildrenByDefault );
+                  self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                     if( err ) return callback( err );
 
-                    if( self.strictSchemaOnFetch && errors.length ) {
-                      var e =  new self.SchemaError( "Schema is strict and loaded data didn't match");
-                      e.errors = errors;
-                      return cb( e );
-                    }
+                    // Note: at this point, _children might be either the old existing one,
+                    // or a new copy created by _cleanRecord
+                    // Sort out _children AND
+                    // get rid of obj._clean which isn't meant to be returned to the user
+                    if( options.children || self.fetchChildrenByDefault )
+                      self._deleteUcFieldsAndCleanfromChildren( _children );
+                    delete validatedDoc._clean;
 
-                    // Re-add children, since it may be required later and was zapped by
-                    // schema.validate()
-                    if( options.children || self.fetchChildrenByDefault ) validatedDoc._children = _children;
+                    //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
+                    queryDocs[ index ] = validatedDoc;
 
-                    // If the object isn't clean, then it will trigger the _completeRecord
-                    // call which will effectively complete the record with the right _children
-                    // and add any UC fields needed
-                    var skip = clean || !( options.children || self.fetchChildrenByDefault );
-                    self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
-                      if( err ) return callback( err );
-
-                      // Note: at this point, _children might be either the old existing one,
-                      // or a new copy created by _cleanRecord
-                      // Sort out _children AND
-                      // get rid of obj._clean which isn't meant to be returned to the user
-                      if( options.children || self.fetchChildrenByDefault )
-                        self._deleteUcFieldsAndCleanfromChildren( _children );
-                      delete validatedDoc._clean;
-
-                      //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
-                      queryDocs[ index ] = validatedDoc;
-
-                      callback( null );
-                    });
-
+                    callback( null );
                   });
+
                 });
               });
+            });
 
-              // If it was a delete, delete each record
-              // Note that there is no check whether the delete worked or not
-              if( options.delete ){
-                toDelete.forEach( function( _id ){
-                  self.collection.remove( { _id: _id }, function( err ){ } );
-                });
-              }
-
-              async.parallel( changeFunctions, function( err ){
-                if( err ) return cb( err );
-
-                // That's all!
-                cb( null, queryDocs, total, grandTotal );
+            // If it was a delete, delete each record
+            // Note that there is no check whether the delete worked or not
+            if( options.delete ){
+              toDelete.forEach( function( _id ){
+                self.collection.remove( { _id: _id }, function( err ){ } );
               });
+            }
+
+            async.parallel( changeFunctions, function( err ){
+              if( err ) return cb( err );
+
+              // That's all!
+              cb( null, queryDocs, total, grandTotal );
             });
           });
         });
-      }
-    });
+      });
+    }
+
   },
 
   
