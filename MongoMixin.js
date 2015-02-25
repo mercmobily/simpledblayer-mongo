@@ -440,10 +440,10 @@ var MongoMixin = declare( Object, {
   
     if( options.useCursor ){
 
-      cursor.count( function( err, grandTotal ){
+      cursor.count( false, function( err, grandTotal ){
         if( err ) return cb( err )
 
-        cursor.count( { applySkipLimit: true }, function( err, total ){
+        cursor.count( true, function( err, total ){
           if( err ) return cb( err );
 
           cb( null, {
@@ -571,10 +571,10 @@ var MongoMixin = declare( Object, {
       cursor.toArray( function( err, queryDocs ){
         if( err ) return cb( err );
 
-        cursor.count( function( err, grandTotal ){
+        cursor.count( false, function( err, grandTotal ){
           if( err ) return cb( err );
 
-          cursor.count( { applySkipLimit: true }, function( err, total ){
+          cursor.count( true, function( err, total ){
             if( err ) return cb( err );
 
             // Cycle to work out the toDelete array _and_ get rid of the _id_
@@ -767,8 +767,12 @@ var MongoMixin = declare( Object, {
         // If options.multi is off, then use findAndModify which will return the doc
         if( !options.multi ){
 
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, function( err, doc ){
+          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { new: true }, function( err, doc ){
             if( err ) return cb( err );
+
+            // Patched for mongo driver 2.0
+            // TODO: findAndModify is deprecated, update to a current function AND probably delete this
+            doc = doc.value;
 
             if( doc ){
 
@@ -777,7 +781,6 @@ var MongoMixin = declare( Object, {
                 if( err ) return cb( err );
 
                 // Getting the full record so that I can emit
-                // TODO: Update the API, so that a single update also returns the fullRecord
                 self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
                   if( err ) return cb( err );
 
