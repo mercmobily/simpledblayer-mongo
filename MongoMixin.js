@@ -694,7 +694,6 @@ var MongoMixin = declare( Object, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-
     // You cannot do a multiple update when options.deleteUnsetFields is set, as _every_
     // required field needs to be specified -- and the idProperty is obviously required
     // deleteUnsetFields is there so that a "document.save()"-style called can be performed
@@ -789,7 +788,7 @@ var MongoMixin = declare( Object, {
                 })
               });
             } else {
-              cb( null, 0 );
+              cb( null, 0, null );
             }
           });
 
