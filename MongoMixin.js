@@ -796,8 +796,10 @@ var MongoMixin = declare( Object, {
         } else {
 
           // Run the query
-          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { multi: true }, function( err, total ){
+          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { multi: true }, function( err, r ){
             if( err ) return cb( err );
+
+            var total = r.result.n;
 
             // MONGO: Change parents
             self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
@@ -962,8 +964,8 @@ var MongoMixin = declare( Object, {
       // Not a multple delete: limit it to one
       filters.ranges = { limit: 1 };
 
-      // Fetch the record that is about to be deleted, with `delete` option on
-      self.select( filters, { delete: true }, function( err, fetchedRecords ){
+      // Fetch the record that is about to be deleted
+      self.select( filters, function( err, fetchedRecords ){
         if( err ) return cb( err );
 
         // Nothing is there: call callback with 0
@@ -972,14 +974,22 @@ var MongoMixin = declare( Object, {
         // The first item is the one that will get deleted
         var fetchedRecord = fetchedRecords[ 0 ];
 
-        self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
+        var deleteSelector = {}
+        deleteSelector[ self.idProperty ] = fetchedRecord[ self.idProperty ];
+
+        // Fetch the record that is about to be deleted
+        self.collection.remove( deleteSelector, { single: true }, function( err, n ){
           if( err ) return cb( err );
 
-          self.emit( 'deleteOne', fetchedRecord, conditions, options );
+          self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
+            if( err ) return cb( err );
 
-          // Call callback with 1, the number of deleted records
-          // TODO: Update API so that it's clear that fetched record is returned
-          cb( null, 1, fetchedRecord );
+            self.emit( 'deleteOne', fetchedRecord, conditions, options );
+
+            // Call callback with 1, the number of deleted records
+            // TODO: Update API so that it's clear that fetched record is returned
+            cb( null, 1, fetchedRecord );
+          });
         });
       })
 
@@ -994,13 +1004,13 @@ var MongoMixin = declare( Object, {
       } catch( e ){
         return cb( e );
       }
-      consolelog("DELETE SELECTOR: ", mongoParameters.querySelector );
       
-      self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, total ){
+      self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
+        if( err ) return cb( err );
+        
+        var total = r.result.n;
 
         self.emit( 'deleteMany', conditions, options );
-
-        consolelog("TOTAL FOR SELECTOR: ", total, mongoParameters.querySelector );
 
         self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
           if( err ) return cb( err );
