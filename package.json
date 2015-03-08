@@ -16,6 +16,9 @@
   "author": {
     "name": "Tony Mobily"
   },
+  "devDependencies": {
+    "simpleschema": "0.3.x"
+  },
   "dependencies": {
     "simpledblayer": "0.3.x",
     "simpledeclare": "0.3.x",
