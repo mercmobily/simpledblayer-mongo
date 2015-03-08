@@ -535,12 +535,16 @@ var MongoMixin = declare( Object, {
                       self._deleteUcFieldsAndCleanfromChildren( _children );
                     delete obj._clean;
 
-                    // If options.delete is on, then remove a field straight after fetching it
+                    // If options.delete is on, then remove the record before returning it
                     if( options.delete ){
-                      return self.collection.remove( { _id: obj._id }, done );
-                    }
+                      self.collection.remove( { _id: obj._id }, function( err ){
+                        if( err ) return done( err );
 
-                    done( null, obj );
+                        return done( null, obj );
+                      });
+                    } else {
+                      done( null, obj );
+                    }
                   });
                 });
               });
@@ -577,35 +581,31 @@ var MongoMixin = declare( Object, {
           cursor.count( true, function( err, total ){
             if( err ) return cb( err );
 
-            // Cycle to work out the toDelete array _and_ get rid of the _id_
-            // from the resultset
-            /*
-            var toDelete = [];
-            queryDocs.forEach( function( doc ){
-              if( options.delete ) toDelete.push( doc._id );
-              if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
-            });
-            */
-
             consolelog("QUERYDOCS: ", queryDocs );
 
-            var toDelete = [];
-            var changeFunctions = [];
-            // Validate each doc, running a validate function for each one of them in parallel
-            queryDocs.forEach( function( doc, index ){
+            var _id;
 
-              // Mark this as one to be deleted at the end
-              if( options.delete ) toDelete.push( doc._id );
+            var index = -1 ;
+            async.eachSeries(
 
-              // Mongo will return _id: if it's not in the schema, zap it
-              if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+              queryDocs,
 
-              // We will need this later if option.children was true, as
-              // schema.validate() will wipe it
-              if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
-              var clean = doc._clean;
+              function( doc, callback ){
 
-              changeFunctions.push( function( callback ){
+                // Index starts from 0
+                index ++;
+
+                // If options.delete is on, we will need doc._id to delete this item
+                if( options.delete ) _id = doc._id;
+
+                // Mongo will return _id: if it's not in the schema, zap it
+                if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+
+                // We will need this later if option.children was true, as
+                // schema.validate() will wipe it
+                if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
+                var clean = doc._clean;
+
                 self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
 
                   if( err ) return callback( err );
@@ -635,35 +635,38 @@ var MongoMixin = declare( Object, {
                       self._deleteUcFieldsAndCleanfromChildren( _children );
                     delete validatedDoc._clean;
 
-                    //if( errors.length ) return cb( new self.SchemaError( { errors: errors } ) );
                     queryDocs[ index ] = validatedDoc;
 
-                    callback( null );
+                    // If options.delete is false, then this functon is done
+                    if( ! options.delete ) return callback( null );
+
+                    // If options.delete is true, then attempt to delete the record first
+                    self.collection.remove( { _id: _id }, function( err ){
+                      if( err ){
+                        delete queryDocs[ index ];
+                        err.errorInDelete = true; // The error happened during deletion
+                        return callback( err );
+                      }
+                      callback( null );
+                    });
+
                   });
-
                 });
-              });
-            });
+              },
 
-            // If it was a delete, delete each record
-            // Note that there is no check whether the delete worked or not
-            if( options.delete ){
-              toDelete.forEach( function( _id ){
-                self.collection.remove( { _id: _id }, function( err ){ } );
-              });
-            }
+              // Note that an error in deletion is NOT going to cause this to fail.
+              // TODO: maybe emit a signal, or do SOMETHING to notify the error in case of errorInDelete
+              function( err ){
+                if( err && ! err.errorInDelete ) return cb( err );
 
-            async.parallel( changeFunctions, function( err ){
-              if( err ) return cb( err );
-
-              // That's all!
-              cb( null, queryDocs, total, grandTotal );
-            });
+                // That's all!
+                cb( null, queryDocs, total, grandTotal );
+              }
+            );
           });
         });
       });
     }
-
   },
 
   
