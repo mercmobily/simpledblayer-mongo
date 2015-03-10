@@ -28,6 +28,8 @@ function makeObjectId( id ){
   return ( id instanceof mongo.ObjectID) ? id : mongo.ObjectID( id );
 }
 
+var MONGO = 1;
+
 //Differenciation BW TingoDb and MongoDB starts here
 
 function _makeOperator( op ){
@@ -774,7 +776,7 @@ var MongoMixin = declare( Object, {
 
             // Patched for mongo driver 2.0
             // TODO: findAndModify is deprecated, update to a current function AND probably delete this
-            doc = doc.value;
+            if( MONGO ) doc = doc.value;
 
             if( doc ){
 
@@ -802,7 +804,7 @@ var MongoMixin = declare( Object, {
           self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { multi: true }, function( err, r ){
             if( err ) return cb( err );
 
-            var total = r.result.n;
+            if( MONGO ) var total = r.result.n;
 
             // MONGO: Change parents
             self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
@@ -1011,7 +1013,7 @@ var MongoMixin = declare( Object, {
       self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
         if( err ) return cb( err );
         
-        var total = r.result.n;
+        if( MONGO) var total = r.result.n;
 
         self.emit( 'deleteMany', conditions, options );
 
