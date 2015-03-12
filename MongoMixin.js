@@ -771,7 +771,9 @@ var MongoMixin = declare( Object, {
         // If options.multi is off, then use findAndModify which will return the doc
         if( !options.multi ){
 
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { new: true }, function( err, doc ){
+          var u = { $set: updateObjectWithLookups };
+          if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
+          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, u, { new: true }, function( err, doc ){
             if( err ) return cb( err );
 
             // Patched for mongo driver 2.0
@@ -801,7 +803,10 @@ var MongoMixin = declare( Object, {
         } else {
 
           // Run the query
-          self.collection.update( mongoParameters.querySelector, { $set: updateObjectWithLookups, $unset: unsetObjectWithLookups }, { multi: true }, function( err, r ){
+
+          var u = { $set: updateObjectWithLookups };
+          if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;        
+          self.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, r ){
             if( err ) return cb( err );
 
             if( MONGO ) var total = r.result.n;
@@ -1852,11 +1857,13 @@ var MongoMixin = declare( Object, {
             consolelog( rnd, "SELECTOR:" );
             consolelog( rnd, selector );
 
-            parentLayer.collection.update( selector, { $set: relativeUpdateObject, $unset: relativeUnsetObject }, { multi: true }, function( err, total ){
+            var u = { $set: relativeUpdateObject };
+            if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;        
+            parentLayer.collection.update( selector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
 
               consolelog( rnd, "Updated:", total, "records" );
-
+              
               return cb( null );
 
             });
@@ -1907,12 +1914,11 @@ var MongoMixin = declare( Object, {
             consolelog( rnd,  "updateObject:" );
             consolelog( relativeUpdateObject );
 
-            parentLayer.collection.update( mongoParameters.querySelector,
-            { $set: relativeUpdateObject, $unset: relativeUnsetObject },
-            { multi: true },
-            function( err, total ){
-
+            var u = { $set: relativeUpdateObject };
+            if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;
+            parentLayer.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
+
               consolelog( rnd, "Updated:", total, "records" );
 
               return cb( null );
