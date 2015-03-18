@@ -175,13 +175,13 @@ var MongoMixin = declare( Object, {
     var a, aWithPrefix, aIsSearchableAsString, b;
 
     // If there is no condition, return an empty filter
-    if( ! conditions.name ) return {};
+    if( ! conditions.type ) return {};
 
     // Scan filters recursively, making up the mongo query
-    if( conditions.name == 'and' || conditions.name == 'or' ){
+    if( conditions.type == 'and' || conditions.type == 'or' ){
 
       // For 'and', it will return { $and: [ ... ] }
-      var mongoName = '$' + conditions.name;
+      var mongoName = '$' + conditions.type;
 
       // The content of the $and key will be the result of makeMongo
       var r = {};
@@ -194,8 +194,8 @@ var MongoMixin = declare( Object, {
 
       // Otherwise, run the operator encoutered
       // (But, remember to fixup the field name (paths, etc.) and possibly the checked value (uppercase)
-      var operator = this._operators[ conditions.name ];
-      if( ! operator ) throw( new Error( "Could not find operator: " + conditions.name ) );
+      var operator = this._operators[ conditions.type ];
+      if( ! operator ) throw( new Error( "Could not find operator: " + conditions.type ) );
 
       // Save this for later
       a = conditions.args[ 0 ];
@@ -810,6 +810,7 @@ var MongoMixin = declare( Object, {
             if( err ) return cb( err );
 
             if( NEWAPI ) var total = r.result.n;
+            else total = r;
 
             // MONGO: Change parents
             self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
@@ -1019,6 +1020,7 @@ var MongoMixin = declare( Object, {
         if( err ) return cb( err );
         
         if( NEWAPI ) var total = r.result.n;
+        else var total = r;
 
         self.emit( 'deleteMany', conditions, options );
 
@@ -1056,10 +1058,10 @@ var MongoMixin = declare( Object, {
     var id = record[ idProperty ];
 
     // Make up conditionsHash based on the positionBase array
-    //conditionsHash = { name: 'and', args: [] };
+    //conditionsHash = { type: 'and', args: [] };
     //for( var i = 0, l = self.positionBase.length; i < l; i ++ ){
     //  var positionBaseField = self.positionBase[ i ];
-    //  conditionsHash.args.push( { name: 'eq', args: [ positionBaseField, record[ positionBaseField ] ] } );
+    //  conditionsHash.args.push( { type: 'eq', args: [ positionBaseField, record[ positionBaseField ] ] } );
     //  one = true;
     //}
     conditionsHash = {};
@@ -1875,7 +1877,7 @@ var MongoMixin = declare( Object, {
 
             // Sorry, can't. MongoDb bug #1243
             if( nestedParams.type === 'multiple' ){
-              return cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is unimplementable") );
+              return cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is un`able") );
             }
 
             // The rest is untested and untestable code (not till #1243 is solved)
