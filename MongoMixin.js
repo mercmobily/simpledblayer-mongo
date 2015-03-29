@@ -263,7 +263,6 @@ var MongoMixin = declare( Object, {
     var self = this;
     var sortHash = {};
 
-    consolelog( "filters.sort is:", sort );
     //consolelog( "_sortableHash is:", self._sortableHash );
     for( var field  in sort ){
       if( ! sort.hasOwnProperty( field) ) continue;
@@ -391,6 +390,7 @@ var MongoMixin = declare( Object, {
       return cb( e );
     }
 
+
     consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, { depth: 10 } ) );
 
     // If sortHash is empty, AND there is a self.positionField, then sort
@@ -437,6 +437,8 @@ var MongoMixin = declare( Object, {
     if( saneRanges.skip )  cursor.skip( saneRanges.skip );
     if( saneRanges.limit ) cursor.limit( saneRanges.limit );
 
+
+    consolelog("SORTING THIS VIA MONGODB AS:", mongoParameters.sortHash );
     // Sort the query
     cursor.sort( mongoParameters.sortHash );
   
@@ -899,25 +901,22 @@ var MongoMixin = declare( Object, {
           self.collection.insert( recordWithLookups, function( err ){
             if( err ) return cb( err );
 
-            // This will get called shortly. Bypasses straight to callback
-            // or calls reposition with right parameters and then calls callback
+            // Call self.reposition if self.positionField is set. This only happens
+            // automatically on insers, obviously.
+            // This will get called shortly, and will call cb() straight away if no
+            // repositioning is needed
             var repositionIfNeeded = function( cb ){
-              if( ! self.positionField ){
-                cb( null );
-              } else {
+              if( ! self.positionField ) return cb( null );
 
-                // If repositioning is required, do it
-                if( self.positionField ){
-                  var where, beforeId;
-                  if( ! options.position ){
-                    where = 'last';
-                  } else {
-                    where = options.position.where;
-                    beforeId = options.position.beforeId;
-                  }
-                  self.reposition( recordWithLookups, where, beforeId, cb );
-                }
+              var where, beforeId;
+              if( ! options.position ){
+                where = 'end';
+              } else {
+                where = options.position.where;
+                beforeId = options.position.beforeId;
               }
+              self.reposition( recordWithLookups, where, beforeId, cb );
+              
             };
             repositionIfNeeded( function( err ){
               if( err ) return cb( err );
@@ -1086,8 +1085,8 @@ var MongoMixin = declare( Object, {
 
       // Set 'from' and 'to' depending on parameters
       switch( where ){
-        case 'first':  to = 0; break;
-        case 'last': to = data.length; break;
+        case 'start':  to = 0; break;
+        case 'end': to = data.length; break;
         case 'before':
           data.forEach( function( a, i ){ if( a[ idProperty ].toString() == beforeId.toString() ) to = i; } );
         break;
