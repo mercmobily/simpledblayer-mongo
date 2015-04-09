@@ -499,7 +499,10 @@ var MongoMixin = declare( Object, {
                 // Returned null: nothing to see here
                 if( obj === null ) return done( null, null );
 
+
                 // Mongo will return _id: if it's not in the schema, zap it
+                // (Will save it first, in case it will be needed for deletion)
+                var _id = obj._id;
                 if( typeof( self._fieldsHash._id ) === 'undefined' )  delete obj._id;
 
                 // We will need this later if option.children was true, as
@@ -541,7 +544,7 @@ var MongoMixin = declare( Object, {
 
                     // If options.delete is on, then remove the record before returning it
                     if( options.delete ){
-                      self.collection.remove( { _id: obj._id }, function( err ){
+                      self.collection.remove( { _id: _id }, function( err, r ){
                         if( err ) return done( err );
 
                         return done( null, obj );
@@ -715,117 +718,127 @@ var MongoMixin = declare( Object, {
     // Otherwise, just to the passed fields is fine
     var onlyObjectValues = !options.deleteUnsetFields;
 
-    // Validate what was passed...
-    self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
+    self.emitCollect( 'preUpdate', conditions, updateObject, options, function( err ){
+      if( err ) return cb( err ); 
 
-      // If there is an error, end of story
-      // If validation fails, call callback with self.SchemaError
-      if( err ) return cb( err );
+      // Validate what was passed...
+      self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
 
-     if( errors.length ){
-        var schemaError = new self.SchemaError( { errors: errors } );
-        schemaError.errors = errors;
-        return cb( schemaError );
-      }
-
-      // The _id field cannot be updated. If it's there,
-      // simply delete it
-      delete updateObject._id;
-
-      // Add __uc__ fields to the updateObject (they are the uppercase fields
-      // used for filtering of string fields)
-      self._addUcFields( updateObject );
-
-      // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
-      // so that partial PUTs will "overwrite" whole objects rather than
-      // just overwriting fields that are _actually_ present in `body`
-      // NOTE: fields marked as "protected" in the schema are spared, as they are... well, protected!
-      if( options.deleteUnsetFields ){
-        Object.keys( self._fieldsHash ).forEach( function( i ){
-          if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
-            unsetObject[ i ] = 1;
-
-            // Get rid of __uc__ objects if the equivalent field was taken out
-            if( self._isSearchableAsString( i ) && unsetObject[ i ] ){
-              unsetObject[ '__uc__' + i ] = 1;
-            }
-          }
-        });
-      }
-
-      // Make up parameters from the passed filters
-      var mongoParameters;
-      try {
-        mongoParameters = self._makeMongoParameters( filters );
-      } catch( e ){
-        return cb( e );
-      }
-
-      consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
-      consolelog( rnd, "Selector:", mongoParameters.querySelector );
-
-      self._makeUpdateAndUnsetObjectWithLookups( updateObject, unsetObject, function( err, updateObjectWithLookups, unsetObjectWithLookups  ){
+        // If there is an error, end of story
+        // If validation fails, call callback with self.SchemaError
         if( err ) return cb( err );
 
-        consolelog( rnd, "Update object with lookups:", updateObjectWithLookups );
-        consolelog( rnd, "Unset object with lookups:", unsetObjectWithLookups );
+       if( errors.length ){
+          var schemaError = new self.SchemaError( { errors: errors } );
+          schemaError.errors = errors;
+          return cb( schemaError );
+        }
 
-        // If options.multi is off, then use findAndModify which will return the doc
-        if( !options.multi ){
+        // The _id field cannot be updated. If it's there,
+        // simply delete it
+        delete updateObject._id;
 
-          var u = { $set: updateObjectWithLookups };
-          if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
-          self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, u, { new: true }, function( err, doc ){
-            if( err ) return cb( err );
+        // Add __uc__ fields to the updateObject (they are the uppercase fields
+        // used for filtering of string fields)
+        self._addUcFields( updateObject );
 
-            // Patched for mongo driver 2.0
-            // TODO: findAndModify is deprecated, update to a current function AND probably delete this
-            if( NEWAPI ) doc = doc.value;
+        // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
+        // so that partial PUTs will "overwrite" whole objects rather than
+        // just overwriting fields that are _actually_ present in `body`
+        // NOTE: fields marked as "protected" in the schema are spared, as they are... well, protected!
+        if( options.deleteUnsetFields ){
+          Object.keys( self._fieldsHash ).forEach( function( i ){
+            if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
+              unsetObject[ i ] = 1;
 
-            if( doc ){
-
-              // Change parents so that the one record is updated
-              self._updateParentsRecords( { op: 'updateOne', id: doc[ self.idProperty ], updateObject: updateObject, unsetObject: unsetObject }, function( err ){
-                if( err ) return cb( err );
-
-                // Getting the full record so that I can emit
-                self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
-                  if( err ) return cb( err );
-
-                  self.emit( 'updateOne', fullRecord, conditions, updateObject, options );
-                  cb( null, 1, fullRecord );
-                })
-              });
-            } else {
-              cb( null, 0, null );
+              // Get rid of __uc__ objects if the equivalent field was taken out
+              if( self._isSearchableAsString( i ) && unsetObject[ i ] ){
+                unsetObject[ '__uc__' + i ] = 1;
+              }
             }
-          });
-
-        // If options.multi is on, no document will be returned: it will just use mongo's "update"
-        } else {
-
-          // Run the query
-
-          var u = { $set: updateObjectWithLookups };
-          if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;        
-          self.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, r ){
-            if( err ) return cb( err );
-
-            if( NEWAPI ) var total = r.result.n;
-            else total = r;
-
-            // MONGO: Change parents
-            self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
-              if( err ) return cb( err );
-
-              self.emit( 'updateMany', conditions, updateObject, options );
-
-              cb( null, total );
-            });
           });
         }
 
+        // Make up parameters from the passed filters
+        var mongoParameters;
+        try {
+          mongoParameters = self._makeMongoParameters( filters );
+        } catch( e ){
+          return cb( e );
+        }
+
+        consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
+        consolelog( rnd, "Selector:", mongoParameters.querySelector );
+
+        self._makeUpdateAndUnsetObjectWithLookups( updateObject, unsetObject, function( err, updateObjectWithLookups, unsetObjectWithLookups  ){
+          if( err ) return cb( err );
+
+          consolelog( rnd, "Update object with lookups:", updateObjectWithLookups );
+          consolelog( rnd, "Unset object with lookups:", unsetObjectWithLookups );
+
+          // If options.multi is off, then use findAndModify which will return the doc
+          if( !options.multi ){
+
+            var u = { $set: updateObjectWithLookups };
+            if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
+            self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, u, { new: true }, function( err, doc ){
+              if( err ) return cb( err );
+
+              // Patched for mongo driver 2.0
+              // TODO: findAndModify is deprecated, update to a current function AND probably delete this
+              if( NEWAPI ) doc = doc.value;
+
+              if( doc ){
+
+                // Change parents so that the one record is updated
+                self._updateParentsRecords( { op: 'updateOne', id: doc[ self.idProperty ], updateObject: updateObject, unsetObject: unsetObject }, function( err ){
+                  if( err ) return cb( err );
+
+                  // Getting the full record so that I can emit
+                  self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
+                    if( err ) return cb( err );
+
+                    self.emitCollect( 'updateOne', fullRecord, conditions, updateObject, options, function( err ){
+                      if( err ) return cb( err );
+
+                      cb( null, 1, fullRecord );
+                    });
+                  })
+                });
+              } else {
+                cb( null, 0, null );
+              }
+            });
+
+          // If options.multi is on, no document will be returned: it will just use mongo's "update"
+          } else {
+
+            // Run the query
+
+            var u = { $set: updateObjectWithLookups };
+            if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;        
+            self.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, r ){
+              if( err ) return cb( err );
+
+              if( NEWAPI ) var total = r.result.n;
+              else total = r;
+
+              // MONGO: Change parents
+              self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
+                if( err ) return cb( err );
+
+                self.emitCollect( 'updateMany', conditions, updateObject, options, function( err ){
+                  if( err ) return cb( err );
+
+                  cb( null, total );
+                });
+              });
+            });
+          }
+
+        });
       });
+
     });
 
   },
@@ -860,79 +873,85 @@ var MongoMixin = declare( Object, {
     }
 
     function restOfFunction(){
+       
+      self.emitCollect( 'preInsert', record, options, function( err ){
+        if( err ) return cb( err ); 
 
-      // Validate the record against the schema
-      self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
+        // Validate the record against the schema
+        self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
 
-        // If there is an error, end of story
-        // If validation fails, call callback with self.SchemaError
-        if( err ) return cb( err );
-
-        if( errors.length ){
-          var schemaError = new self.SchemaError( { errors: errors } );
-          schemaError.errors = errors;
-          return cb( schemaError );
-        }
-
-        consolelog( rnd, "record after validation:", record );
-
-        // Add __uc__ fields to the record
-        self._addUcFields( record );
-
-        consolelog( rnd, "record with __uc__ fields:", record );
-
-        self._completeRecord( record, function( err, recordWithLookups ){
+          // If there is an error, end of story
+          // If validation fails, call callback with self.SchemaError
           if( err ) return cb( err );
 
-          consolelog( rnd, "recordWithLookups is:", recordWithLookups);
+          if( errors.length ){
+            var schemaError = new self.SchemaError( { errors: errors } );
+            schemaError.errors = errors;
+            return cb( schemaError );
+          }
 
-          // Every record in Mongo MUST have an _id field. Note that I do this here
-          // so that record doesn't include an _id field when self._makeRecordWithLookups
-          // is called (which would imply that $pushed, non-main children elements would also
-          // have _id
-          if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = makeObjectId();
+          consolelog( rnd, "record after validation:", record );
 
-          recordWithLookups._clean = true;
+          // Add __uc__ fields to the record
+          self._addUcFields( record );
 
-          consolelog( rnd, "record with _id added:", record );
-          consolelog( rnd, "ADDING:", recordWithLookups );
+          consolelog( rnd, "record with __uc__ fields:", record );
 
-          // Actually run the insert
-          self.collection.insert( recordWithLookups, function( err ){
+          self._completeRecord( record, function( err, recordWithLookups ){
             if( err ) return cb( err );
 
-            // Call self.reposition if self.positionField is set. This only happens
-            // automatically on insers, obviously.
-            // This will get called shortly, and will call cb() straight away if no
-            // repositioning is needed
-            var repositionIfNeeded = function( cb ){
-              if( ! self.positionField ) return cb( null );
+            consolelog( rnd, "recordWithLookups is:", recordWithLookups);
 
-              var where, beforeId;
-              if( ! options.position ){
-                where = 'end';
-              } else {
-                where = options.position.where;
-                beforeId = options.position.beforeId;
-              }
-              self.reposition( recordWithLookups, where, beforeId, cb );
-              
-            };
-            repositionIfNeeded( function( err ){
+            // Every record in Mongo MUST have an _id field. Note that I do this here
+            // so that record doesn't include an _id field when self._makeRecordWithLookups
+            // is called (which would imply that $pushed, non-main children elements would also
+            // have _id
+            if( typeof( recordWithLookups._id ) === 'undefined' ) recordWithLookups._id  = makeObjectId();
+
+            recordWithLookups._clean = true;
+
+            consolelog( rnd, "record with _id added:", record );
+            consolelog( rnd, "ADDING:", recordWithLookups );
+
+            // Actually run the insert
+            self.collection.insert( recordWithLookups, function( err ){
               if( err ) return cb( err );
 
-              self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
+              // Call self.reposition if self.positionField is set. This only happens
+              // automatically on insers, obviously.
+              // This will get called shortly, and will call cb() straight away if no
+              // repositioning is needed
+              var repositionIfNeeded = function( cb ){
+                if( ! self.positionField ) return cb( null );
+
+                var where, beforeId;
+                if( ! options.position ){
+                  where = 'end';
+                } else {
+                  where = options.position.where;
+                  beforeId = options.position.beforeId;
+                }
+                self.reposition( recordWithLookups, where, beforeId, cb );
+                
+              };
+              repositionIfNeeded( function( err ){
                 if( err ) return cb( err );
 
-                // Re-fetch the record using the API
-                self.selectById( record[ self.idProperty ], function( err, fetchedRecord ){
+                self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
                   if( err ) return cb( err );
 
-                  // Emit the insert event
-                  self.emit( 'insert', fetchedRecord, record, options );
-                
-                  return cb( null, fetchedRecord );
-                })
+                  // Re-fetch the record using the API
+                  self.selectById( record[ self.idProperty ], function( err, fetchedRecord ){
+                    if( err ) return cb( err );
+
+                    // Emit the insert event
+                    self.emitCollect( 'insert', fetchedRecord, record, options, function( err ){
+                      if( err ) return cb( err );
+
+                      return cb( null, fetchedRecord );
+                    });
+                  })
+                });
               });
             });
           });
@@ -967,70 +986,79 @@ var MongoMixin = declare( Object, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
-    // If options.multi is off, then use findAndModify which will give us the ID of the modify one (which
-    // will be passed to _updateParentRecords)
-    if( !options.multi ){
 
-      // Not a multple delete: limit it to one
-      filters.ranges = { limit: 1 };
+    self.emitCollect( 'preDelete', conditions, options, function( err ){
+      if( err ) return cb( err ); 
+   
 
-      // Fetch the record that is about to be deleted
-      self.select( filters, function( err, fetchedRecords ){
-        if( err ) return cb( err );
+      // If options.multi is off, then use findAndModify which will give us the ID of the modify one (which
+      // will be passed to _updateParentRecords)
+      if( !options.multi ){
 
-        // Nothing is there: call callback with 0
-        if( fetchedRecords.length === 0 ) return cb( null, 0 );
-
-        // The first item is the one that will get deleted
-        var fetchedRecord = fetchedRecords[ 0 ];
-
-        var deleteSelector = {}
-        deleteSelector[ self.idProperty ] = fetchedRecord[ self.idProperty ];
+        // Not a multple delete: limit it to one
+        filters.ranges = { limit: 1 };
 
         // Fetch the record that is about to be deleted
-        self.collection.remove( deleteSelector, { single: true }, function( err, n ){
+        self.select( filters, function( err, fetchedRecords ){
           if( err ) return cb( err );
 
-          self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
+          // Nothing is there: call callback with 0
+          if( fetchedRecords.length === 0 ) return cb( null, 0 );
+
+          // The first item is the one that will get deleted
+          var fetchedRecord = fetchedRecords[ 0 ];
+
+          var deleteSelector = {}
+          deleteSelector[ self.idProperty ] = fetchedRecord[ self.idProperty ];
+
+          // Fetch the record that is about to be deleted
+          self.collection.remove( deleteSelector, { single: true }, function( err, n ){
             if( err ) return cb( err );
 
-            self.emit( 'deleteOne', fetchedRecord, conditions, options );
+            self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
+              if( err ) return cb( err );
 
-            // Call callback with 1, the number of deleted records
-            // TODO: Update API so that it's clear that fetched record is returned
-            cb( null, 1, fetchedRecord );
+              self.emitCollect( 'deleteOne', fetchedRecord, conditions, options, function( err ){
+                if( err ) return cb( err );
+
+                // Call callback with 1, the number of deleted records
+                // TODO: Update API so that it's clear that fetched record is returned
+                cb( null, 1, fetchedRecord );
+              });
+            });
+          });
+        })
+
+      // If options.multi is on, then simply use `remove`, as _updateParentsRecords will simply get
+      // the filters as parameter
+      } else {
+
+        // Make up the query for remove
+        var mongoParameters;
+        try {
+          mongoParameters = self._makeMongoParameters( filters );
+        } catch( e ){
+          return cb( e );
+        }
+        
+        self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
+          if( err ) return cb( err );
+          
+          if( NEWAPI ) var total = r.result.n;
+          else var total = r;
+
+          self.emitCollect( 'deleteMany', conditions, options, function( err ){
+            if( err ) return cb( err );
+
+            self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
+              if( err ) return cb( err );
+
+              cb( null, total );
+            });
           });
         });
-      })
-
-    // If options.multi is on, then simply use `remove`, as _updateParentsRecords will simply get
-    // the filters as parameter
-    } else {
-
-      // Make up the query for remove
-      var mongoParameters;
-      try {
-        mongoParameters = this._makeMongoParameters( filters );
-      } catch( e ){
-        return cb( e );
       }
-      
-      self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
-        if( err ) return cb( err );
-        
-        if( NEWAPI ) var total = r.result.n;
-        else var total = r;
-
-        self.emit( 'deleteMany', conditions, options );
-
-        self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
-          if( err ) return cb( err );
-
-          cb( null, total );
-        });
-
-      });
-    }
+    })
 
   },
 
