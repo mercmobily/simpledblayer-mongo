@@ -18,6 +18,7 @@ var
 , async = require( 'async' )
 , debug = require( 'debug' )
 , mongo = require( 'mongodb' )
+, SimpleDbLayer = require('simpledblayer')
 ;
 
 var consolelogOrig;
@@ -66,10 +67,10 @@ var MongoMixin = declare( Object, {
     // Create self.collection, used by every single query
     self.collection = self.db.collection( self.table );
 
-    if( MongoMixin.registry[ self.table ] ){
+    if( SimpleDbLayer.registry[ self.table ] ){
       throw new Error( "Only one layer instance can be created for table " + self.table );
     }
-    MongoMixin.registry[ self.table ] = self;
+    SimpleDbLayer.registry[ self.table ] = self;
 
   },
 
@@ -2098,5 +2099,4 @@ MongoMixin.makeId = function( id, cb ){
   }
 };
 
-MongoMixin.registry = {};
 exports = module.exports = MongoMixin;
