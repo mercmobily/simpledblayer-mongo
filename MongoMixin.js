@@ -29,7 +29,7 @@ function makeObjectId( id ){
   return ( id instanceof mongo.ObjectID) ? id : mongo.ObjectID( id );
 }
 
-var NEWAPI = 0;
+var NEWAPI = 1;
 
 //Differenciation BW TingoDb and MongoDB starts here
 
@@ -218,7 +218,7 @@ var MongoMixin = declare( Object, {
 
       //console.log("Type of b before the cure:" , a, conditions, typeof b );
       var definition = self._searchableHash[ aWithPrefix ];
-      var definitionSchema = self._searchableHashSchema[ aWithPrefix ];      
+      var definitionSchema = self._searchableHashSchema[ aWithPrefix ];
       var type = definition.type;
       var castFunction = type && definitionSchema[ type + 'TypeCast'];
       var failedCasts = {};
@@ -233,7 +233,7 @@ var MongoMixin = declare( Object, {
       // TODO: See what to do about error
       //console.log("Type of b after the cure:" , typeof b );
       //console.log("Errors: " , errors );
-  
+
       // Create aIsSearchableAsString. Saving the result as I will need the result
       // if this check later on, to determine whether to add __uc__ to `a`
       aIsSearchableAsString = this._isSearchableAsString( aWithPrefix );
@@ -369,7 +369,7 @@ var MongoMixin = declare( Object, {
     );
   },
 
-  
+
   select: function( filters, options, cb ){
 
     var self = this;
@@ -442,7 +442,7 @@ var MongoMixin = declare( Object, {
     consolelog("SORTING THIS VIA MONGODB AS:", mongoParameters.sortHash );
     // Sort the query
     cursor.sort( mongoParameters.sortHash );
-  
+
     if( options.useCursor ){
 
       cursor.count( false, function( err, grandTotal ){
@@ -480,7 +480,7 @@ var MongoMixin = declare( Object, {
 
                     });
                   });
-                }, 
+                },
                 function(){ return i !== null; },
 
                 function( err ) {
@@ -589,6 +589,8 @@ var MongoMixin = declare( Object, {
           cursor.count( true, function( err, total ){
             if( err ) return cb( err );
 
+            consolelog("Err:", err );
+
             consolelog("QUERYDOCS: ", queryDocs );
 
             var _id;
@@ -677,7 +679,7 @@ var MongoMixin = declare( Object, {
     }
   },
 
-  
+
   update: function( conditions, updateObject, options, cb ){
 
     var self = this;
@@ -720,7 +722,7 @@ var MongoMixin = declare( Object, {
     var onlyObjectValues = !options.deleteUnsetFields;
 
     self.emitCollect( 'preUpdate', conditions, updateObject, options, function( err ){
-      if( err ) return cb( err ); 
+      if( err ) return cb( err );
 
       // Validate what was passed...
       self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
@@ -730,9 +732,9 @@ var MongoMixin = declare( Object, {
         if( err ) return cb( err );
 
        if( errors.length ){
-          var schemaError = new self.SchemaError( { errors: errors } );
-          schemaError.errors = errors;
-          return cb( schemaError );
+          var SchemaError = new self.SchemaError( { errors: errors } );
+          SchemaError.errors = errors;
+          return cb( SchemaError );
         }
 
         // The _id field cannot be updated. If it's there,
@@ -817,7 +819,7 @@ var MongoMixin = declare( Object, {
             // Run the query
 
             var u = { $set: updateObjectWithLookups };
-            if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;        
+            if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
             self.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, r ){
               if( err ) return cb( err );
 
@@ -874,9 +876,9 @@ var MongoMixin = declare( Object, {
     }
 
     function restOfFunction(){
-       
+
       self.emitCollect( 'preInsert', record, options, function( err ){
-        if( err ) return cb( err ); 
+        if( err ) return cb( err );
 
         // Validate the record against the schema
         self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
@@ -886,9 +888,9 @@ var MongoMixin = declare( Object, {
           if( err ) return cb( err );
 
           if( errors.length ){
-            var schemaError = new self.SchemaError( { errors: errors } );
-            schemaError.errors = errors;
-            return cb( schemaError );
+            var SchemaError = new self.SchemaError( { errors: errors } );
+            SchemaError.errors = errors;
+            return cb( SchemaError );
           }
 
           consolelog( rnd, "record after validation:", record );
@@ -933,7 +935,7 @@ var MongoMixin = declare( Object, {
                   beforeId = options.position.beforeId;
                 }
                 self.reposition( recordWithLookups, where, beforeId, cb );
-                
+
               };
               repositionIfNeeded( function( err ){
                 if( err ) return cb( err );
@@ -989,8 +991,8 @@ var MongoMixin = declare( Object, {
 
 
     self.emitCollect( 'preDelete', conditions, options, function( err ){
-      if( err ) return cb( err ); 
-   
+      if( err ) return cb( err );
+
 
       // If options.multi is off, then use findAndModify which will give us the ID of the modify one (which
       // will be passed to _updateParentRecords)
@@ -1041,10 +1043,10 @@ var MongoMixin = declare( Object, {
         } catch( e ){
           return cb( e );
         }
-        
+
         self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
           if( err ) return cb( err );
-          
+
           if( NEWAPI ) var total = r.result.n;
           else var total = r;
 
@@ -1097,7 +1099,7 @@ var MongoMixin = declare( Object, {
       var positionBaseField = self.positionBase[ i ];
       conditionsHash[ positionBaseField ] = record[ positionBaseField ];
     }
-    
+
     consolelog("Repositioning basing it on", positionField, "conditionsHash:", conditionsHash, "positionBase: ", self.positionBase, "idProperty: ", idProperty, "id: ", id );
 
     // Run the select, ordered by the positionField and satisfying the positionBase
@@ -1178,6 +1180,8 @@ var MongoMixin = declare( Object, {
   makeIndex: function( keys, name, options, cb ){
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
+
+    //return cb( null );
 
     consolelog("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
 
@@ -1888,12 +1892,12 @@ var MongoMixin = declare( Object, {
             consolelog( rnd, selector );
 
             var u = { $set: relativeUpdateObject };
-            if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;        
+            if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;
             parentLayer.collection.update( selector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
 
               consolelog( rnd, "Updated:", total, "records" );
-              
+
               return cb( null );
 
             });
