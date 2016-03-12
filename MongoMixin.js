@@ -120,7 +120,6 @@ var MongoMixin = declare( Object, {
 
     ne: _makeOperator( '$ne' ),
 
-
     lt: _makeOperator( '$lt' ),
     gt: _makeOperator( '$gt' ),
 
@@ -130,6 +129,21 @@ var MongoMixin = declare( Object, {
     eq: function( a, b ){
       var r = {};
       r[ a ] = b;
+      return r;
+    },
+
+    near: function( a, b ){
+      var r = {};
+
+      r[ a ] = {
+        $nearSphere: {
+          $geometry: {
+            type: "Point", coordinates: [ b[ 0 ], b[ 1 ] ]
+          },
+          $maxDistance: b[ 2]
+        }
+
+      }
       return r;
     },
 
@@ -215,6 +229,8 @@ var MongoMixin = declare( Object, {
       }
 
       // Cast the field to the right type in the schema
+      // TODO: Really, seriously, implement a nice way in simpleSchema to
+      // cast a single field without this level of ugliness
 
       //console.log("Type of b before the cure:" , a, conditions, typeof b );
       var definition = self._searchableHash[ aWithPrefix ];
@@ -387,6 +403,7 @@ var MongoMixin = declare( Object, {
     var mongoParameters;
     try {
       mongoParameters = this._makeMongoParameters( filters );
+      console.log("MONGO PARAMETERS:", require('util').inspect( mongoParameters, {depth: 10 } ) );
     } catch( e ){
       return cb( e );
     }
@@ -725,7 +742,7 @@ var MongoMixin = declare( Object, {
       if( err ) return cb( err );
 
       // Validate what was passed...
-      self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
+      self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skipValidation: options.skipValidation }, function( err, updateObject, errors ){
 
         // If there is an error, end of story
         // If validation fails, call callback with self.SchemaError
@@ -881,7 +898,7 @@ var MongoMixin = declare( Object, {
         if( err ) return cb( err );
 
         // Validate the record against the schema
-        self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
+        self.schema.validate( record, { skipValidation: options.skipValidation }, function( err, record, errors ){
 
           // If there is an error, end of story
           // If validation fails, call callback with self.SchemaError
@@ -1181,18 +1198,22 @@ var MongoMixin = declare( Object, {
     //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
-    //return cb( null );
+    // This is important or the call will stall
+    if( Object.keys( keys).length === 0 ) return cb( null );
 
     consolelog("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
+    //opt.background = false;
     opt.unique = !!options.unique;
     if( typeof( name ) === 'string' )  opt.name = name;
 
-    this.collection.ensureIndex( keys, opt, function( err ){
+    consolelog("ONE", keys, opt);
+    this.collection.createIndex( keys, opt, function( err ){
       if( err ) return cb( err );
 
+      consolelog("TWO", keys, opt);
       cb( null );
     });
   },
@@ -1208,7 +1229,15 @@ var MongoMixin = declare( Object, {
 
   _addAllPrefixes: function( s, prefix ){
 
+    consolelog("S IS:", s );
+    //if( prefix && s.indexOf('.') === -1 )s = prefix + '.' + s;
     if( prefix ) s = prefix + '.' + s;
+
+    consolelog("S NOW IS: ", s );
+
+    consolelog("s is", s );
+    consolelog("isSearchableAsString is:");
+    consolelog( require('util').inspect( this._searchableHash ) );
 
     // Add the __uc prefix (if necessary)
     if( this._isSearchableAsString( s ) ) {
@@ -1251,18 +1280,21 @@ var MongoMixin = declare( Object, {
     var keysJustBase = {};
     self._indexGroups.__main.indexBase.forEach( function( indexBaseField ){
       indexBaseField = self._addAllPrefixes( indexBaseField, '' );
+      consolelog("indexBaseField after adding ALL prefixes 1: ", indexBaseField );
       keysJustBase[ indexBaseField ] = 1;
     });
-    consolelog("+++Adding searchable key (just base):", keysJustBase );
     //allIndexes[ group + self._makeSignature( keysJustBase ) ] = { keys: keysJustBase, opt: opt };
-    allIndexes.push( { keys: keysJustBase, opt: opt, name: 'indexBase' } );
+    if( Object.keys( keysJustBase ).length != 0 ){
+      consolelog("+++Adding searchable key (just base):", keysJustBase );
+      allIndexes.push( { keys: keysJustBase, opt: opt, name: 'indexBase' } );
+    }
 
     // Go through each group
     Object.keys( self._indexGroups ).forEach( function( group ){
 
       var indexGroup = self._indexGroups[ group ];
 
-      consolelog("\n\nDealing with group: ", group, indexGroup );
+      consolelog("\n\nDealing with group: ", group, require('util').inspect( indexGroup, { depth: 10 } )  );
 
       // Sets the field prefix. For __main, it's empty.
       var fieldPrefix = group === '__main' ? '' : group;
@@ -1271,7 +1303,6 @@ var MongoMixin = declare( Object, {
 
       // Goes through every group...
       Object.keys( indexGroup.indexes ).forEach( function( indexName ){
-
 
         var indexData = indexGroup.indexes[ indexName ];
         consolelog("ENTRY:", indexName, indexData );
@@ -1296,40 +1327,53 @@ var MongoMixin = declare( Object, {
         // Adding keys without base
         // ******************************
         var keysSearchable = {};
+        var cleanPathLookup = {};
         Object.keys( indexData.fields ).forEach( function( fieldName ){
+          var originalFieldName = fieldName;
+          consolelog("fieldPrefix, fieldName: ", fieldPrefix, fieldName );
           var entryData = indexData.fields[ fieldName ];
           fieldName = self._addAllPrefixes( fieldName, fieldPrefix );
+          consolelog("indexBaseField after adding ALL prefixes 2: ", fieldName );
           keysSearchable[ fieldName ] = entryData.direction;
+          cleanPathLookup[ fieldName ] = originalFieldName;
         });
         consolelog("+++ADDING ", indexNameWithPrefix, keysSearchable, indexData.options );
         allIndexes.push( { name: indexNameWithPrefix, keys: keysSearchable, opt: indexOptions } );
+
+        if( indexGroup.indexBase.length )
+          consolelog("indexBase is not empty:", indexGroup.indexBase );
 
         // **********************************************************************************
         // Making up the same index as keysSearchable, but with indexBase as a starting point
         // **********************************************************************************
         if( indexGroup.indexBase.length && fieldPrefix === '' ){
 
-          consolelog("indexBase is not empty:", indexGroup.indexBase );
+          var indexName = '';
 
           // Make up the base bit
           var keysSearchableWithBase = {};
           indexGroup.indexBase.forEach( function( indexBaseField ){
+            indexName = indexName + "_" + indexBaseField;
             indexBaseField = self._addAllPrefixes( indexBaseField );
+            consolelog("indexBaseField after adding ALL prefixes 3: ", indexBaseField );
             keysSearchableWithBase[ indexBaseField ] = 1;
           });
 
-          // Add the searchable part (borriwing it from above)
+          // Add the searchable part (borrowing it from above)
           for( k in keysSearchable ){
             if( !keysSearchable.hasOwnProperty( k ) ) continue;
             keysSearchableWithBase[ k ] = keysSearchable[ k ];
+            indexName = indexName + "_" + cleanPathLookup[ k ];
           }
+
           // Make up the index, but only the resulting key is longer than indexBase itself
           // (E.g. indexbase is { workspaceId: 1, personId: 1 } and are indexing personId: the new
           // field will just overwrite one in indexBase, and as a result without this check it would just
           // index indexBase again)
           if( Object.keys( keysSearchableWithBase ).length > indexGroup.indexBase.length ){
             consolelog("+++ADDING searchable key (with base):", 'base_' + indexName, keysSearchableWithBase,indexData.options );
-            allIndexes.push( { name: 'base_' + indexName, keys: keysSearchableWithBase, opt: indexOptions } );
+
+            allIndexes.push( { name: indexName, keys: keysSearchableWithBase, opt: indexOptions } );
           } else {
             consolelog("+++NOT ADDING searchable key (with base), overlapping:", 'base_' + indexName );
           }
@@ -1357,6 +1401,7 @@ var MongoMixin = declare( Object, {
     async.eachSeries(
       allIndexes,
       function( item, cb ){
+        consolelog("ITEM: ", item );
         self.makeIndex( item.keys, item.name, item.opt, cb );
       },
       cb
