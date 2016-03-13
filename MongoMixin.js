@@ -403,7 +403,7 @@ var MongoMixin = declare( Object, {
     var mongoParameters;
     try {
       mongoParameters = this._makeMongoParameters( filters );
-      console.log("MONGO PARAMETERS:", require('util').inspect( mongoParameters, {depth: 10 } ) );
+      //consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, {depth: 10 } ) );
     } catch( e ){
       return cb( e );
     }
