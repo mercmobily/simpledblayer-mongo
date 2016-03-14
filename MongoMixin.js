@@ -1320,6 +1320,12 @@ var MongoMixin = declare( Object, {
           indexOptions[ k ] = indexData.options[ k ];
         }
 
+        // Sub-records most not be unique in mongoDB
+        // http://stackoverflow.com/questions/35978832/indexing-array-subobject-in-mongodb-causes-duplicate-key-error/35978894#35978894
+        if( fieldPrefix != '' ){
+          indexOptions.unique = false;
+        }
+
         // Work out indexName with prefix
         var indexNameWithPrefix = fieldPrefix === '' ? indexName: fieldPrefix + "_" + indexName;
 
