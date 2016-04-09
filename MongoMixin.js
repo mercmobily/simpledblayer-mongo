@@ -170,10 +170,10 @@ var MongoMixin = declare( Object, {
 
   // Make parameters for queries. It's the equivalent of what would be
   // an SQL creator for a SQL layer
-  _makeMongoParameters: function( filters, fieldPrefix, selectorWithoutBells ){
+  _makeMongoParameters: function( conditions, options, fieldPrefix, selectorWithoutBells ){
     return  {
-      querySelector: this._makeMongoConditions( filters.conditions || {}, fieldPrefix, selectorWithoutBells ),
-      sortHash:  this._makeMongoSortHash( filters.sort || {}, fieldPrefix )
+      querySelector: this._makeMongoConditions( conditions || {}, fieldPrefix, selectorWithoutBells ),
+      sortHash:  this._makeMongoSortHash( options && options.sort || {}, fieldPrefix )
     };
   },
 
@@ -386,7 +386,7 @@ var MongoMixin = declare( Object, {
   },
 
 
-  select: function( filters, options, cb ){
+  select: function( conditions, options, cb ){
 
     var self = this;
     var saneRanges;
@@ -399,15 +399,30 @@ var MongoMixin = declare( Object, {
       return cb( new Error("The options parameter must be a non-null object") );
     }
 
+
+    // Normalise parameter to make things compatible with old API
+    var warning;
+    if( conditions.sort ){ warning = true; options.sort = conditions.sort; }
+    if( conditions.ranges){ warning = true; options.ranges = conditions.ranges; }
+    if( conditions.conditions ){ warning = true; conditions = conditions.conditions; }
+    if( warning ){
+      var caller_line = (new Error).stack.split("\n")[2]
+      console.warn("WARNING: Using the old-style API for select, parameters were normalised:", caller_line );
+    }
+
     // Make up parameters from the passed filters
     var mongoParameters;
     try {
-      mongoParameters = this._makeMongoParameters( filters );
+      mongoParameters = this._makeMongoParameters( conditions, options );
       //consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, {depth: 10 } ) );
     } catch( e ){
       return cb( e );
     }
 
+
+    if( options.blockEmptyFilter && Object.keys( mongoParameters.querySelector ).length === 0 ){
+      return cb( new Error("Cannot run update on empty query") );
+    }
 
     consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, { depth: 10 } ) );
 
@@ -415,7 +430,7 @@ var MongoMixin = declare( Object, {
     // by the element's position
     consolelog("TABLE:", self.table );
     consolelog("OPTIONS", options );
-    consolelog("FILTERS", require('util').inspect( filters, { depth: 10 } ) );
+    consolelog("CONDITIONS", require('util').inspect( conditions, { depth: 10 } ) );
 
     consolelog("SORT HASH", mongoParameters.sortHash );
     consolelog( Object.keys( mongoParameters.sortHash ).length );
@@ -449,7 +464,7 @@ var MongoMixin = declare( Object, {
 
     // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
     // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
-    saneRanges = self.sanitizeRanges( filters.ranges, options.useCursor || options.skipHardLimitOnQueries );
+    saneRanges = self.sanitizeRanges( options.ranges, options.useCursor || options.skipHardLimitOnQueries );
 
     // Skipping/limiting according to ranges/limits
     if( saneRanges.skip )  cursor.skip( saneRanges.skip );
@@ -703,15 +718,6 @@ var MongoMixin = declare( Object, {
 
     var unsetObject = {};
 
-    // This is such a common mistake, I will make thins work and give out a warning
-    if( conditions.conditions ){
-      console.warn( "(In update) update and delete methods only accept conditions, not filters. Refer to documentation of SimpleDbLayer. This query will still work, but possibly not as expected (ranges and limits are not applied)" );
-      conditions = conditions.conditions;
-    }
-
-    // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
-    var filters = { conditions: conditions };
-
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
     consolelog( rnd, "ENTRY: update for ", self.table, ' => ', updateObject, "options:", options );
@@ -782,9 +788,13 @@ var MongoMixin = declare( Object, {
         // Make up parameters from the passed filters
         var mongoParameters;
         try {
-          mongoParameters = self._makeMongoParameters( filters );
+          mongoParameters = self._makeMongoParameters( conditions );
         } catch( e ){
           return cb( e );
+        }
+
+        if( !self.allowEmptyQueryOnUpdate && !options.allowEmptyQuery && Object.keys( mongoParameters.querySelector ).length === 0 ){
+          return cb( new Error("Cannot run update on empty query") );
         }
 
         consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
@@ -844,7 +854,7 @@ var MongoMixin = declare( Object, {
               else total = r;
 
               // MONGO: Change parents
-              self._updateParentsRecords( { op: 'updateMany', filters: filters, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
+              self._updateParentsRecords( { op: 'updateMany', conditions: conditions, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
                 if( err ) return cb( err );
 
                 self.emitCollect( 'updateMany', conditions, updateObject, options, function( err ){
@@ -985,18 +995,9 @@ var MongoMixin = declare( Object, {
 
     var self = this;
 
-    // This is such a common mistake, I will make thins work and give out a warning
-    if( conditions.conditions ){
-      console.warn( "(In delete) update and delete methods only accept conditions, not filters. Refer to documentation of SimpleDbLayer. This query will still work, but possibly not as expected (ranges and limits are not applied)" );
-      conditions = conditions.conditions;
-    }
-
-    // Make up a `filter` object; note that only `condition` will ever be passed to _makeMongoParameters
-    var filters = { conditions: conditions };
-
     var rnd = Math.floor(Math.random()*100 );
     consolelog( "\n");
-    consolelog( rnd, "ENTRY: delete for ", self.table, ' => ', require('util').inspect( filters, { depth: 10 }  ) );
+    consolelog( rnd, "ENTRY: delete for ", self.table, ' => ', require('util').inspect( conditions, { depth: 10 }  ) );
 
     // Usual drill
     if( typeof( cb ) === 'undefined' ){
@@ -1015,11 +1016,8 @@ var MongoMixin = declare( Object, {
       // will be passed to _updateParentRecords)
       if( !options.multi ){
 
-        // Not a multple delete: limit it to one
-        filters.ranges = { limit: 1 };
-
         // Fetch the record that is about to be deleted
-        self.select( filters, function( err, fetchedRecords ){
+        self.select( conditions, { ranges: { limit: 1 }, blockEmptyFilter: !options.allowEmptyQuery && !self.allowEmptyQueryOnDelete }, function( err, fetchedRecords ){
           if( err ) return cb( err );
 
           // Nothing is there: call callback with 0
@@ -1056,10 +1054,15 @@ var MongoMixin = declare( Object, {
         // Make up the query for remove
         var mongoParameters;
         try {
-          mongoParameters = self._makeMongoParameters( filters );
+          mongoParameters = self._makeMongoParameters( conditions );
         } catch( e ){
           return cb( e );
         }
+
+        if( !options.allowEmptyQuery && !self.allowEmptyQueryOnDelete && Object.keys( mongoParameters.querySelector ).length === 0 ){
+          return cb( new Error("Cannot run delete on empty query") );
+        }
+
 
         self.collection.remove( mongoParameters.querySelector, { single: false }, function( err, r ){
           if( err ) return cb( err );
@@ -1070,7 +1073,7 @@ var MongoMixin = declare( Object, {
           self.emitCollect( 'deleteMany', conditions, options, function( err ){
             if( err ) return cb( err );
 
-            self._updateParentsRecords( { op: 'deleteMany', filters: filters }, function( err ){
+            self._updateParentsRecords( { op: 'deleteMany', conditions: conditions }, function( err ){
               if( err ) return cb( err );
 
               cb( null, total );
@@ -1122,7 +1125,7 @@ var MongoMixin = declare( Object, {
     // Run the select, ordered by the positionField and satisfying the positionBase
     var sortParams = { };
     sortParams[ positionField ] = 1;
-    self.selectByHash( { sort: sortParams, conditions: conditionsHash }, { skipHardLimitOnQueries: true }, function( err, data ){
+    self.selectByHash( conditionsHash, {  sort: sortParams, skipHardLimitOnQueries: true }, function( err, data ){
       if( err ) return cb( err );
 
       consolelog("Data before: ", data );
@@ -1806,7 +1809,8 @@ var MongoMixin = declare( Object, {
     var layer = this;
     var selector;
     var updateObject, unsetObject, relativeUnsetObject, relativeUpdateObject;
-    var id, k, prefix, filters, mongoParameters;
+    var id, k, prefix, mongoParameters;
+    var conditions, options;
 
     // Paranoid checks and sane defaults for params
     if( typeof( params ) !== 'object' || params === null ) params = {};
@@ -1960,19 +1964,17 @@ var MongoMixin = declare( Object, {
 
             // Sorry, can't. MongoDb bug #1243
             if( nestedParams.type === 'multiple' ){
-              return cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243, or this is un`able") );
+              return cb( new Error("You cannot do a mass update of a table that has a father table with 1:n relationship with it. Ask Mongo people to fix https://jira.mongodb.org/browse/SERVER-1243") );
             }
 
-            // The rest is untested and untestable code (not till #1243 is solved)
-
             // Assign the parameters
-            filters = params.filters;
+            conditions = params.conditions;
             updateObject = params.updateObject;
             unsetObject = params.unsetObject;
 
             // Make up parameters from the passed filters
             try {
-              mongoParameters = parentLayer._makeMongoParameters( filters, field );
+              mongoParameters = parentLayer._makeMongoParameters( conditions, {}, field );
               // var mongoParameters = parentLayer._makeMongoParameters( filters );
             } catch( e ){
               return cb( e );
@@ -2004,7 +2006,7 @@ var MongoMixin = declare( Object, {
             parentLayer.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
 
-              consolelog( rnd, "Updated:", total, "records" );
+              consolelog( rnd, "Updated:", total.result.n, "records" );
 
               return cb( null );
             });
@@ -2060,13 +2062,12 @@ var MongoMixin = declare( Object, {
             consolelog( rnd, "CASE #3 (deleteMany)", params.op );
 
             // Assign the parameters
-            filters = params.filters;
-
-            consolelog("Making filter...", filters, field );
+            conditions = params.conditions;
+            consolelog("Making filter...", conditions, field );
 
             // Make up parameters from the passed filters
             try {
-              mongoParameters = parentLayer._makeMongoParameters( filters, field );
+              mongoParameters = parentLayer._makeMongoParameters( conditions, options, field );
             } catch( e ){
               return cb( e );
             }
@@ -2075,7 +2076,7 @@ var MongoMixin = declare( Object, {
             // Make up parameters from the passed filters
             var mongoParametersForPull;
             try {
-              mongoParametersForPull = parentLayer._makeMongoParameters( filters, field, true );
+              mongoParametersForPull = parentLayer._makeMongoParameters( conditions, options, field, true );
             } catch( e ){
               return cb( e );
             }
