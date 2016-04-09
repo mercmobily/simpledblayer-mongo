@@ -9,7 +9,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-var 
+var
   dummy
 
 , path = require('path')
@@ -79,35 +79,44 @@ var tests = simpledblayerTests.get(
          g.mongoPeople.insert( person, function( err, personReturned ){
            test.ifError( err );
 
-           g.mongoPeople.update( { name: 'eq', args: [ 'name', 'Tory' ] }, { surname: "Me"  }, function( err, howMany ){
+           g.mongoPeople.update( { type: 'eq', args: [ 'name', 'Tory' ] }, { surname: "Me"  }, function( err, howMany ){
+             test.ifError( err );
+             if( err ) console.log( new Error().stack );
+
              test.equal( howMany, 1 );
-           
+
              g.mongoPeople.makeId( null, function( err, id ){
+               test.ifError( err );
+               if( err ) console.log( new Error().stack );
+
                test.equal( typeof( id ), 'object' );
 
-               g.mongoPeople.update( { name: 'eq', args: [ 'name', 'Tory' ] }, { _id: id  }, function( err, howMany ){ 
-                 test.equal( typeof( err ), 'object' ); 
+               //g.mongoPeople.update( { type: 'eq', args: [ 'name', 'Tory' ] }, { _id: id  }, function( err, howMany ){
+              //   test.ifError( err );
+              //   if( err ) console.log( new Error().stack );
+
+              //   test.equal( typeof( err ), 'object' );
 
                  test.done();
 
-               });
+              // });
              });
            });
          });
       },
 
-      
+
       "indexing": function( test ){
-   
+
         g.Layer.getLayer('peopleR').generateSchemaIndexes( {}, function( err ){
- 
+
         //g.mongoPeople.generateSchemaIndexes( {}, function( err ){
           //console.log("HUMMMM", SimpleDbLayer.getAllLayers() );
           test.done();
         });
       }
 
-    }   
+    }
   }
 
 );
@@ -116,6 +125,3 @@ var tests = simpledblayerTests.get(
 for(var test in tests) {
     exports[ test ] = tests[ test ];
 }
-
-
-
