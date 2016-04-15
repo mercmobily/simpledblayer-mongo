@@ -421,7 +421,7 @@ var MongoMixin = declare( Object, {
 
 
     if( options.blockEmptyFilter && Object.keys( mongoParameters.querySelector ).length === 0 ){
-      return cb( new Error("Cannot run update on empty query") );
+      return cb( new Error("Cannot run on empty query") );
     }
 
     consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, { depth: 10 } ) );
@@ -1532,7 +1532,7 @@ var MongoMixin = declare( Object, {
 
         var childTableData = self.multipleChildrenTablesHash[ recordKey ];
 
-        //var childLayer = childTableData.layer;
+        var childLayer = childTableData.layer;
         //var nestedParams = childTableData.nestedParams;
 
         consolelog( rnd, "Working on ", childTableData.layer.table );
@@ -1542,6 +1542,11 @@ var MongoMixin = declare( Object, {
         // ROOT to _getChildrenData
         self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
           if( err ) return cb( err );
+
+           childData.forEach( function( item ){
+            childLayer._addUcFields( item );
+          })
+          childData._children = {};
 
           consolelog( rnd, "The childData data is:", childData );
 
