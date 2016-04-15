@@ -747,6 +747,21 @@ var MongoMixin = declare( Object, {
     self.emitCollect( 'preUpdate', conditions, updateObject, options, function( err ){
       if( err ) return cb( err );
 
+      // Assigning to `null` means zapping them.
+      // TODO: Either make this mandatory in the API, or implement a better way
+      // of unsetting fields
+      Object.keys( self._fieldsHash ).forEach( function( i ){
+
+        if( updateObject[ i ] === null ) {
+
+          unsetObject[ i ] = 1;
+          delete updateObject[ i ];
+          if( self._isSearchableAsString( i ) ){
+            unsetObject[ '__uc__' + i ] = 1;
+          }
+        }
+      });
+
       // Validate what was passed...
       self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skipValidation: options.skipValidation }, function( err, updateObject, errors ){
 
@@ -778,7 +793,7 @@ var MongoMixin = declare( Object, {
               unsetObject[ i ] = 1;
 
               // Get rid of __uc__ objects if the equivalent field was taken out
-              if( self._isSearchableAsString( i ) && unsetObject[ i ] ){
+              if( self._isSearchableAsString( i ) ){
                 unsetObject[ '__uc__' + i ] = 1;
               }
             }
@@ -799,6 +814,8 @@ var MongoMixin = declare( Object, {
 
         consolelog( rnd, "About to update. At this point, updateObject is:", updateObject );
         consolelog( rnd, "Selector:", mongoParameters.querySelector );
+        consolelog( rnd, "Unset object::", unsetObject );
+
 
         self._makeUpdateAndUnsetObjectWithLookups( updateObject, unsetObject, function( err, updateObjectWithLookups, unsetObjectWithLookups  ){
           if( err ) return cb( err );
@@ -809,9 +826,10 @@ var MongoMixin = declare( Object, {
           // If options.multi is off, then use findAndModify which will return the doc
           if( !options.multi ){
 
-            var u = { $set: updateObjectWithLookups };
+            var u = {};
+            if( Object.keys( updateObjectWithLookups ).length )  u.$set = updateObjectWithLookups;
             if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
-            self.collection.findAndModify( mongoParameters.querySelector, mongoParameters.sortHash, u, { new: true }, function( err, doc ){
+            self.collection.findAndModify( mongoParameters.querySelector, {}, u, { new: true }, function( err, doc, n ){
               if( err ) return cb( err );
 
               // Patched for mongo driver 2.0
@@ -1946,7 +1964,8 @@ var MongoMixin = declare( Object, {
             consolelog( rnd, "SELECTOR:" );
             consolelog( rnd, selector );
 
-            var u = { $set: relativeUpdateObject };
+            var u = {};
+            if( Object.keys( relativeUpdateObject ).length ) u.$set = relativeUpdateObject ;
             if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;
             parentLayer.collection.update( selector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
@@ -2001,7 +2020,8 @@ var MongoMixin = declare( Object, {
             consolelog( rnd,  "updateObject:" );
             consolelog( relativeUpdateObject );
 
-            var u = { $set: relativeUpdateObject };
+            var u = {};
+            if( Object.keys( relativeUpdateObject ).length ) u.$set = relativeUpdateObject;
             if( Object.keys( relativeUnsetObject ).length ) u.$unset = relativeUnsetObject;
             parentLayer.collection.update( mongoParameters.querySelector, u, { multi: true }, function( err, total ){
               if( err ) return cb( err );
