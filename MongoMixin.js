@@ -459,7 +459,7 @@ var MongoMixin = declare( Object, {
     consolelog("TABLE: ", self.table );
 
     // Actually run the query
-    var cursor = self.collection.find( mongoParameters.querySelector, projectionHash );
+    var cursor = self.collection.find( mongoParameters.querySelector).project( projectionHash );
     consolelog("FIND IN SELECT: ",  require('util').inspect( mongoParameters.querySelector, { depth: 10 } ) );
 
     // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
@@ -1774,7 +1774,7 @@ var MongoMixin = declare( Object, {
 
         // Runs the query, which will get the children element for that
         // child table depending on the join
-        childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
+        childTableData.layer.collection.find( mongoSelector).project(childTableData.layer._projectionHash ).toArray( function( err, res ){
           if( err ) return cb( err );
 
           var deleteId = typeof( childTableData.layer._fieldsHash._id ) === 'undefined';
@@ -1792,13 +1792,13 @@ var MongoMixin = declare( Object, {
 
         // JOIN QUERY (direct)
         mongoSelector = {};
-        mongoSelector[ childTableData.nestedParams.layerField ] = record[ childTableData.nestedParams.localField ];
+        mongoSelector[ childTableData.nestedParams.layerField ] = record[  childTableData.nestedParams.localField ];
 
         consolelog( rnd, "Running the select with selector:", mongoSelector, "on table", childTableData.layer.table );
 
         // Runs the query, which will get the children element for that
         // child table depending on the join
-        childTableData.layer.collection.find( mongoSelector, childTableData.layer._projectionHash ).toArray( function( err, res ){
+        childTableData.layer.collection.find( mongoSelector).project( childTableData.layer._projectionHash ).toArray( function( err, res ){
           if( err ) return cb( err );
 
           // Return null if it's a lookup and there are no results
@@ -1857,12 +1857,12 @@ var MongoMixin = declare( Object, {
         var nestedParams = parentTableData.nestedParams;
 
         // Figure out the field name, relative to _children.XXXXX
-        // - For multiple, it will just be the table's name
-        // - For lookups, it will be the localField value in nestedParams
+        // - For multiple, it will just be the table's name or prop
+        // - For lookups, it will be the localField value in nestedParams or prop
         var field;
         switch( nestedParams.type ){
-          case 'multiple': field = self.table; break;
-          case 'lookup'  : field = nestedParams.localField; break;
+          case 'multiple': field = nestedParams.prop || self.table; break;
+          case 'lookup'  : field = nestedParams.prop || nestedParams.localField; break;
           default        : return cb( new Error("type needs to be 'lookup' or 'multiple'") );
         }
         consolelog( "FIELD:", field );
