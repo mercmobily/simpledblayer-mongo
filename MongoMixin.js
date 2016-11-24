@@ -246,9 +246,11 @@ var MongoMixin = declare( Object, {
       Object.keys( failedCasts ).forEach( function( fieldName ){
         errors.push( { field: aWithPrefix, message: "Error during casting" } );
       });
-      // TODO: See what to do about error
-      //console.log("Type of b after the cure:" , typeof b );
-      //console.log("Errors: " , errors );
+
+      // There was an error while casting: through a SchemaError
+      if( errors.length ){
+        throw new self.SchemaError( { errors: errors } );
+      }
 
       // Create aIsSearchableAsString. Saving the result as I will need the result
       // if this check later on, to determine whether to add __uc__ to `a`
