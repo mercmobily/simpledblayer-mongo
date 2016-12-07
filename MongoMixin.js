@@ -620,94 +620,90 @@ var MongoMixin = declare( Object, {
         cursor.count( false, function( err, grandTotal ){
           if( err ) return cb( err );
 
-          cursor.count( true, function( err, total ){
-            if( err ) return cb( err );
+          consolelog("Err:", err );
 
-            consolelog("Err:", err );
+          consolelog("QUERYDOCS: ", queryDocs );
 
-            consolelog("QUERYDOCS: ", queryDocs );
+          var _id;
 
-            var _id;
+          var index = -1 ;
+          async.eachSeries(
 
-            var index = -1 ;
-            async.eachSeries(
+            queryDocs,
 
-              queryDocs,
+            function( doc, callback ){
 
-              function( doc, callback ){
+              // Index starts from 0
+              index ++;
 
-                // Index starts from 0
-                index ++;
+              // If options.delete is on, we will need doc._id to delete this item
+              if( options.delete ) _id = doc._id;
 
-                // If options.delete is on, we will need doc._id to delete this item
-                if( options.delete ) _id = doc._id;
+              // Mongo will return _id: if it's not in the schema, zap it
+              if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
 
-                // Mongo will return _id: if it's not in the schema, zap it
-                if( typeof( self._fieldsHash._id ) === 'undefined' ) delete doc._id;
+              // We will need this later if option.children was true, as
+              // schema.validate() will wipe it
+              if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
+              var clean = doc._clean;
 
-                // We will need this later if option.children was true, as
-                // schema.validate() will wipe it
-                if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
-                var clean = doc._clean;
+              self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
 
-                self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
+                if( err ) return callback( err );
 
+                if( self.strictSchemaOnFetch && errors.length ) {
+                  var e =  new self.SchemaError( "Schema is strict and loaded data didn't match");
+                  e.errors = errors;
+                  return cb( e );
+                }
+
+                // Re-add children, since it may be required later and was zapped by
+                // schema.validate()
+                if( options.children || self.fetchChildrenByDefault ) validatedDoc._children = _children;
+
+                // If the object isn't clean, then it will trigger the _completeRecord
+                // call which will effectively complete the record with the right _children
+                // and add any UC fields needed
+                var skip = clean || !( options.children || self.fetchChildrenByDefault );
+                self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                   if( err ) return callback( err );
 
-                  if( self.strictSchemaOnFetch && errors.length ) {
-                    var e =  new self.SchemaError( "Schema is strict and loaded data didn't match");
-                    e.errors = errors;
-                    return cb( e );
-                  }
+                  // Note: at this point, _children might be either the old existing one,
+                  // or a new copy created by _cleanRecord
+                  // Sort out _children AND
+                  // get rid of obj._clean which isn't meant to be returned to the user
+                  if( options.children || self.fetchChildrenByDefault )
+                    self._deleteUcFieldsAndCleanfromChildren( _children );
+                  delete validatedDoc._clean;
 
-                  // Re-add children, since it may be required later and was zapped by
-                  // schema.validate()
-                  if( options.children || self.fetchChildrenByDefault ) validatedDoc._children = _children;
+                  queryDocs[ index ] = validatedDoc;
 
-                  // If the object isn't clean, then it will trigger the _completeRecord
-                  // call which will effectively complete the record with the right _children
-                  // and add any UC fields needed
-                  var skip = clean || !( options.children || self.fetchChildrenByDefault );
-                  self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
-                    if( err ) return callback( err );
+                  // If options.delete is false, then this functon is done
+                  if( ! options.delete ) return callback( null );
 
-                    // Note: at this point, _children might be either the old existing one,
-                    // or a new copy created by _cleanRecord
-                    // Sort out _children AND
-                    // get rid of obj._clean which isn't meant to be returned to the user
-                    if( options.children || self.fetchChildrenByDefault )
-                      self._deleteUcFieldsAndCleanfromChildren( _children );
-                    delete validatedDoc._clean;
-
-                    queryDocs[ index ] = validatedDoc;
-
-                    // If options.delete is false, then this functon is done
-                    if( ! options.delete ) return callback( null );
-
-                    // If options.delete is true, then attempt to delete the record first
-                    self.collection.remove( { _id: _id }, function( err ){
-                      if( err ){
-                        delete queryDocs[ index ];
-                        err.errorInDelete = true; // The error happened during deletion
-                        return callback( err );
-                      }
-                      callback( null );
-                    });
-
+                  // If options.delete is true, then attempt to delete the record first
+                  self.collection.remove( { _id: _id }, function( err ){
+                    if( err ){
+                      delete queryDocs[ index ];
+                      err.errorInDelete = true; // The error happened during deletion
+                      return callback( err );
+                    }
+                    callback( null );
                   });
+
                 });
-              },
+              });
+            },
 
-              // Note that an error in deletion is NOT going to cause this to fail.
-              // TODO: maybe emit a signal, or do SOMETHING to notify the error in case of errorInDelete
-              function( err ){
-                if( err && ! err.errorInDelete ) return cb( err );
+            // Note that an error in deletion is NOT going to cause this to fail.
+            // TODO: maybe emit a signal, or do SOMETHING to notify the error in case of errorInDelete
+            function( err ){
+              if( err && ! err.errorInDelete ) return cb( err );
 
-                // That's all!
-                cb( null, queryDocs, total, grandTotal );
-              }
-            );
-          });
+              // That's all!
+              cb( null, queryDocs, queryDocs.length, grandTotal );
+            }
+          );
         });
       });
     }
@@ -1192,7 +1188,26 @@ var MongoMixin = declare( Object, {
         });
 
         // Runs the updates in series, calling the final callback at the end
-        async.series( updateCalls , cb );
+        async.series( updateCalls, function( err ){
+          if( err ) return cb( err );
+
+          consolelog("******************************REPOSITIONED!" )
+
+          consolelog( "MULTIPLE:", self.table, self.parentTablesArray );
+
+          // TODO POSITIONING: update all parents which a matching entry in _children Setting
+          // _clean to false. This means that its children will be regenerated on new fetch
+
+
+
+
+
+          cb( null );
+
+        } );
+
+
+
 
       } else {
 
@@ -1776,6 +1791,8 @@ var MongoMixin = declare( Object, {
 
         // Runs the query, which will get the children element for that
         // child table depending on the join
+        // TODO POSITIONING: Add sorting by positioning here, so that children will have the
+        // right order
         childTableData.layer.collection.find( mongoSelector).project(childTableData.layer._projectionHash ).toArray( function( err, res ){
           if( err ) return cb( err );
 
