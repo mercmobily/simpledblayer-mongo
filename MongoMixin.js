@@ -203,6 +203,10 @@ var MongoMixin = declare( Object, {
       r[ mongoName ] = conditions.args.map( function( item ){
         return self._makeMongoConditions( item, fieldPrefix, selectorWithoutBells );
       });
+
+      // TODO: IF items have matching item[0], group AND statements together as an
+      // object so that AND queries on subarrays will match the same row
+
       return r;
 
     } else {
@@ -1505,7 +1509,6 @@ var MongoMixin = declare( Object, {
       if( k.substr( 0, 6 ) === '__uc__' ) delete record[ k ];
     }
   },
-
 
 
   _addUcFields: function( record ){
