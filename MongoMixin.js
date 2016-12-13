@@ -1,6 +1,7 @@
 /*jslint node: true, laxcomma:true */
 "use strict";
 
+
 /*
 Copyright (C) 2015 Tony Mobily
 
@@ -394,6 +395,17 @@ var MongoMixin = declare( Object, {
 
   select: function( conditions, options, cb ){
 
+    // This is for 'historical' reasons -- and because it's easier to find `noChildren`
+    // in the code
+    var noChildren;
+    if( typeof options.children != 'undefined' && options.children == false ){
+      noChildren = true;
+    }
+
+
+    //console.log("RAN SELECT WITH", this.table, conditions );
+    //if( typeof options == 'object') console.log("And options:", options );
+
     var self = this;
     var saneRanges;
 
@@ -458,13 +470,16 @@ var MongoMixin = declare( Object, {
       if( ! self._projectionHash.hasOwnProperty( k ) ) continue;
       projectionHash[ k ] = self._projectionHash[ k ];
     }
-    if( options.children || self.fetchChildrenByDefault ) projectionHash._children = true;
-    projectionHash._clean = true;
+
+    if( ! noChildren ) projectionHash._children = true;
+    consolelog("SO PROJECTIONHASH IS:", projectionHash );
+
 
     consolelog("PH: ", options, require('util').inspect( mongoParameters.querySelector, { depth: 10 } ), projectionHash );
     consolelog("TABLE: ", self.table );
 
     // Actually run the query
+    consolelog("PROJECTION HASH:", this.table, projectionHash );
     var cursor = self.collection.find( mongoParameters.querySelector).project( projectionHash );
     consolelog("FIND IN SELECT: ",  require('util').inspect( mongoParameters.querySelector, { depth: 10 } ) );
 
@@ -546,7 +561,7 @@ var MongoMixin = declare( Object, {
 
                 // We will need this later if option.children was true, as
                 // schema.validate() will wipe it
-                if( options.children || self.fetchChildrenByDefault ) var _children = obj._children;
+                if( ! noChildren ) var _children = obj._children;
                 var clean = obj._clean;
 
                 self.schema.validate( obj, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, obj, errors ){
@@ -562,13 +577,13 @@ var MongoMixin = declare( Object, {
 
                   // Re-add children, since it may be required later and was zapped by
                   // schema.validate()
-                  if( options.children || self.fetchChildrenByDefault ) obj._children = _children;
+                  if( ! noChildren ) obj._children = _children;
 
                   // If the object isn't clean, then it will trigger the _completeRecord
                   // call which will effectively complete the record with the right _children
                   // Note that after this call obj._children may or may not get
                   // overwritten (depends wheter _cleanRecord gets skipped).
-                  var skip = !( options.children || self.fetchChildrenByDefault ) || clean;
+                  var skip = noChildren || clean;
                   self.cleanRecord( obj, skip, function( err, obj ){
                     if( err ) return done( err );
 
@@ -577,7 +592,7 @@ var MongoMixin = declare( Object, {
                     // At this point, sort out _children (which might get deleted
                     // altogether or might have extra _uc__ fields) AND
                     // get rid of obj._clean which isn't meant to be returned to the user
-                    if( options.children || self.fetchChildrenByDefault )
+                    if( ! noChildren )
                       self._deleteUcFieldsAndCleanfromChildren( _children );
                     delete obj._clean;
 
@@ -648,7 +663,7 @@ var MongoMixin = declare( Object, {
 
               // We will need this later if option.children was true, as
               // schema.validate() will wipe it
-              if( options.children || self.fetchChildrenByDefault ) var _children = doc._children;
+              if( ! noChildren ) var _children = doc._children;
               var clean = doc._clean;
 
               self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
@@ -663,12 +678,12 @@ var MongoMixin = declare( Object, {
 
                 // Re-add children, since it may be required later and was zapped by
                 // schema.validate()
-                if( options.children || self.fetchChildrenByDefault ) validatedDoc._children = _children;
+                if( !noChildren ) validatedDoc._children = _children;
 
                 // If the object isn't clean, then it will trigger the _completeRecord
                 // call which will effectively complete the record with the right _children
                 // and add any UC fields needed
-                var skip = clean || !( options.children || self.fetchChildrenByDefault );
+                var skip = clean || noChildren;
                 self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                   if( err ) return callback( err );
 
@@ -676,7 +691,7 @@ var MongoMixin = declare( Object, {
                   // or a new copy created by _cleanRecord
                   // Sort out _children AND
                   // get rid of obj._clean which isn't meant to be returned to the user
-                  if( options.children || self.fetchChildrenByDefault )
+                  if( !noChildren )
                     self._deleteUcFieldsAndCleanfromChildren( _children );
                   delete validatedDoc._clean;
 
@@ -746,7 +761,7 @@ var MongoMixin = declare( Object, {
     // Otherwise, just to the passed fields is fine
     var onlyObjectValues = !options.deleteUnsetFields;
 
-    self.emitCollect( 'preUpdate', conditions, updateObject, options, function( err ){
+    self.emitCollect( 'simpledblayer-pre-update', { table: self, conditions: conditions, updateObject: updateObject, options: options }, function( err ){
       if( err ) return cb( err );
 
       // Assigning to `null` means zapping them.
@@ -848,7 +863,7 @@ var MongoMixin = declare( Object, {
                   self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
                     if( err ) return cb( err );
 
-                    self.emitCollect( 'updateOne', fullRecord, conditions, updateObject, options, function( err ){
+                    self.emitCollect( 'simpledblayer-update-one', { table: self, record: fullRecord, conditions: conditions, updateObject: updateObject, options: options }, function( err ){
                       if( err ) return cb( err );
 
                       cb( null, 1, fullRecord );
@@ -877,7 +892,7 @@ var MongoMixin = declare( Object, {
               self._updateParentsRecords( { op: 'updateMany', conditions: conditions, updateObject: updateObject, unsetObject: unsetObject }, function( err ){
                 if( err ) return cb( err );
 
-                self.emitCollect( 'updateMany', conditions, updateObject, options, function( err ){
+                self.emitCollect( 'simpledblayer-update-many', { table: self, conditions: conditions, updateObject: updateObject, options: options}, function( err ){
                   if( err ) return cb( err );
 
                   cb( null, total );
@@ -924,7 +939,7 @@ var MongoMixin = declare( Object, {
 
     function restOfFunction(){
 
-      self.emitCollect( 'preInsert', record, options, function( err ){
+      self.emitCollect( 'simpledblayer-pre-insert', { table: self, record: record, options: options }, function( err ){
         if( err ) return cb( err );
 
         // Validate the record against the schema
@@ -990,12 +1005,14 @@ var MongoMixin = declare( Object, {
                 self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
                   if( err ) return cb( err );
 
+                  var opt = {};
+                  if( typeof opt.children != 'undefiend' ) opt.children = options.children;
                   // Re-fetch the record using the API
-                  self.selectById( record[ self.idProperty ], function( err, fetchedRecord ){
+                  self.selectById( record[ self.idProperty ], opt, function( err, fetchedRecord ){
                     if( err ) return cb( err );
 
                     // Emit the insert event
-                    self.emitCollect( 'insert', fetchedRecord, record, options, function( err ){
+                    self.emitCollect( 'simpledblayer-insert', { table: self, record: fetchedRecord, options: options }, function( err ){
                       if( err ) return cb( err );
 
                       return cb( null, fetchedRecord );
@@ -1028,7 +1045,7 @@ var MongoMixin = declare( Object, {
     }
 
 
-    self.emitCollect( 'preDelete', conditions, options, function( err ){
+    self.emitCollect( 'simpledblayer-pre-delete', { table: self, conditions: conditions, options: options }, function( err ){
       if( err ) return cb( err );
 
 
@@ -1056,7 +1073,7 @@ var MongoMixin = declare( Object, {
             self._updateParentsRecords( { op: 'deleteOne', id: fetchedRecord[ self.idProperty ] }, function( err ){
               if( err ) return cb( err );
 
-              self.emitCollect( 'deleteOne', fetchedRecord, conditions, options, function( err ){
+              self.emitCollect( 'simpledblayer-delete-one', { table: self, record: fetchedRecord, conditions: conditions, options: options }, function( err ){
                 if( err ) return cb( err );
 
                 // Call callback with 1, the number of deleted records
@@ -1090,7 +1107,7 @@ var MongoMixin = declare( Object, {
           if( NEWAPI ) var total = r.result.n;
           else var total = r;
 
-          self.emitCollect( 'deleteMany', conditions, options, function( err ){
+          self.emitCollect( 'simpledblayer-delete-many', { conditions: conditions, options: options }, function( err ){
             if( err ) return cb( err );
 
             self._updateParentsRecords( { op: 'deleteMany', conditions: conditions }, function( err ){
