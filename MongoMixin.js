@@ -487,14 +487,15 @@ var MongoMixin = declare( Object, {
     // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
     saneRanges = self.sanitizeRanges( options.ranges, options.useCursor || options.skipHardLimitOnQueries );
 
+
+    consolelog("SORTING THIS VIA MONGODB AS:", mongoParameters.sortHash );
+    cursor.sort( mongoParameters.sortHash );
+
     // Skipping/limiting according to ranges/limits
     if( saneRanges.skip )  cursor.skip( saneRanges.skip );
     if( saneRanges.limit ) cursor.limit( saneRanges.limit );
 
-
-    consolelog("SORTING THIS VIA MONGODB AS:", mongoParameters.sortHash );
     // Sort the query
-    cursor.sort( mongoParameters.sortHash );
 
     if( options.useCursor ){
 
