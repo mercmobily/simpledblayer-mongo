@@ -182,7 +182,7 @@ var MongoMixin = declare( Object, {
   // function is due to the fact that it deals with the presence of `fieldPrefix` (in case
   // a child field is being modified, which will imply adding '_children.' to it) and
   // the presence of `selectorWithoutBells` (necessary for `$pull` operation in children)
-  _makeMongoConditions: function( conditions, fieldPrefix, selectorWithoutBells ){
+  _makeMongoConditions: function( conditions, fieldPrefix, selectorWithoutBells, onlyLastPath ){
 
     //consolelog("FILTERS IN MONGO MIXIN: " );
     //consolelog( require('util').inspect( filters, {depth: 10 }) );
@@ -200,13 +200,29 @@ var MongoMixin = declare( Object, {
       var mongoName = '$' + conditions.type;
 
       // The content of the $and key will be the result of makeMongo
+      // wr stands for "working return". Normally it's the same as "r"; however,
+      // $elemMatch might mean that wr is r.$elemMatch
       var r = {};
-      r[ mongoName ] = conditions.args.map( function( item ){
-        return self._makeMongoConditions( item, fieldPrefix, selectorWithoutBells );
-      });
+      var wr = r;
 
-      // TODO: IF items have matching item[0], group AND statements together as an
-      // object so that AND queries on subarrays will match the same row
+      var pr;
+
+      // onlyLastPath is set from before.
+      if( onlyLastPath ){
+        selectorWithoutBells = true;
+
+      // onlyLastPath is NOT set from before, but there is an elemMatch
+      } else if( pr = conditions.elemMatch  ){
+        selectorWithoutBells = true;
+
+        r[ '_children.' + pr ] = { $elemMatch: {} } ;
+        wr = r[ '_children.' + pr ].$elemMatch;
+        onlyLastPath = pr;
+      }
+
+      wr[ mongoName ] = conditions.args.map( function( item ){
+        return self._makeMongoConditions( item, fieldPrefix, selectorWithoutBells, onlyLastPath );
+      });
 
       return r;
 
@@ -220,6 +236,11 @@ var MongoMixin = declare( Object, {
       // Save this for later
       a = conditions.args[ 0 ];
       b = conditions.args[ 1 ];
+
+      // Safeguard just in case
+      if( a.indexOf( '.') != -1 && onlyLastPath ){
+        if( onlyLastPath != a.split('.')[0] ) throw new Error("When using elemMatch, sub-paths must all match" );
+      }
 
       // Making up aWithPrefix, useful to check if it's searchable, if
       // b should be converted to upperCase(), etc.
@@ -267,13 +288,18 @@ var MongoMixin = declare( Object, {
 
       // Unless we want a selector without path (only used when `$pull`ing an array in `deleteMany`),
       // `a` needs to become `aWithPrefix`.
-      a = selectorWithoutBells ? a : aWithPrefix;
 
-      // Add __uc__ (if field is 'string') to path
+      a = selectorWithoutBells ? a : aWithPrefix;
       if( aIsSearchableAsString ) a = self._addUcPrefixToPath( a );
 
-      // Add _children to `a` (unless a selector without bells was required)
-      a = selectorWithoutBells ? a : self._addChildrenPrefixToPath( a );
+      if( onlyLastPath ){
+        a = a.substr( a.lastIndexOf('.') + 1);
+      } else {
+        // Add __uc__ (if field is 'string') to path
+
+        // Add _children to `a` (unless a selector without bells was required)
+        a = selectorWithoutBells ? a : self._addChildrenPrefixToPath( a );
+      }
 
       // Call the operator on the two values
       return operator.call( this, a, b, fieldPrefix, selectorWithoutBells );
@@ -2125,6 +2151,12 @@ var MongoMixin = declare( Object, {
           if( params.op === 'deleteMany' ){
 
             consolelog( rnd, "CASE #3 (deleteMany)", params.op );
+
+            // No way. Too untested.
+            if( nestedParams.type === 'multiple' ){
+              return cb( new Error("Sorry, this code is just too untested to do that right now") );
+            }
+
 
             // Assign the parameters
             conditions = params.conditions;
