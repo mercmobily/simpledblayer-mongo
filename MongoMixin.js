@@ -1,5 +1,5 @@
 /*jslint node: true, laxcomma:true */
-"use strict";
+'use strict';
 
 
 /*
@@ -236,6 +236,9 @@ var MongoMixin = declare( Object, {
       // Save this for later
       a = conditions.args[ 0 ];
       b = conditions.args[ 1 ];
+      
+      // If b is a function, then its value is what the function will return
+      if( typeof( b ) == 'function') b = b.call( a );
 
       // Safeguard just in case
       if( a.indexOf( '.') != -1 && onlyLastPath ){
@@ -508,6 +511,14 @@ var MongoMixin = declare( Object, {
     consolelog("PROJECTION HASH:", this.table, projectionHash );
     var cursor = self.collection.find( mongoParameters.querySelector).project( projectionHash );
     consolelog("FIND IN SELECT: ",  require('util').inspect( mongoParameters.querySelector, { depth: 10 } ) );
+
+    /*
+    var __m = mongoParameters.querySelector;
+    var __k = Object.keys( __m );
+    if( __k.length == 1 && __k[0] == 'userId'){
+      console.log("AH!", new Error().stack);
+    }
+    */
 
     // Sanitise ranges. If it's a cursor query, or if the option skipHardLimitOnQueries is on,
     // then will pass true (that is, the skipHardLimitOnQueries parameter will be true )
