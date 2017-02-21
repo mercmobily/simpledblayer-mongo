@@ -236,7 +236,7 @@ var MongoMixin = declare( Object, {
       // Save this for later
       a = conditions.args[ 0 ];
       b = conditions.args[ 1 ];
-      
+
       // If b is a function, then its value is what the function will return
       if( typeof( b ) == 'function') b = b.call( a );
 
@@ -470,8 +470,8 @@ var MongoMixin = declare( Object, {
     if( options.blockEmptyFilter && Object.keys( mongoParameters.querySelector ).length === 0 ){
       return cb( new Error("Cannot run on empty query") );
     }
-
-    consolelog("MONGO PARAMETERS:", require('util').inspect( mongoParameters, { depth: 10 } ) );
+    if( self.table == 'transactions')
+    consolelog("MONGO PARAMETERS:", self.table, require('util').inspect( mongoParameters, { depth: 10 } ) );
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
@@ -818,7 +818,7 @@ var MongoMixin = declare( Object, {
       });
 
       // Validate what was passed...
-      self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skipValidation: options.skipValidation }, function( err, updateObject, errors ){
+      self.schema.validate( updateObject, { onlyObjectValues: onlyObjectValues, skip: options.skipValidation }, function( err, updateObject, errors ){
 
         // If there is an error, end of story
         // If validation fails, call callback with self.SchemaError
@@ -841,10 +841,11 @@ var MongoMixin = declare( Object, {
         // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
         // so that partial PUTs will "overwrite" whole objects rather than
         // just overwriting fields that are _actually_ present in `body`
-        // NOTE: fields marked as "protected" in the schema are spared, as they are... well, protected!
+        // NOTE: (DELETED) fields marked as "protected" in the schema are spared, as they are... well, protected!
         if( options.deleteUnsetFields ){
           Object.keys( self._fieldsHash ).forEach( function( i ){
-            if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
+            //if( !self.schema.structure[ i ].protected && typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
+            if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
               unsetObject[ i ] = 1;
 
               // Get rid of __uc__ objects if the equivalent field was taken out
@@ -981,7 +982,7 @@ var MongoMixin = declare( Object, {
         if( err ) return cb( err );
 
         // Validate the record against the schema
-        self.schema.validate( record, { skipValidation: options.skipValidation }, function( err, record, errors ){
+        self.schema.validate( record, { skip: options.skipValidation }, function( err, record, errors ){
 
           // If there is an error, end of story
           // If validation fails, call callback with self.SchemaError
@@ -1779,12 +1780,15 @@ var MongoMixin = declare( Object, {
               cb( null );
             } else {
 
+/*
               // Watch out: protected fields mustn't be overwritten by an update
               if( ! self.schema.structure[ recordKey ].protected ){
-
+*/
                 // Make up the unsetObjectWithLookup object with the new childData
                 unsetObjectWithLookups[ '_children.' + recordKey ] = 1;
+/*
               }
+*/
 
               // That's it!
               cb( null );
