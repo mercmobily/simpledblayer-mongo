@@ -241,7 +241,7 @@ var MongoMixin = declare( Object, {
       if( typeof( b ) == 'function') b = b.call( a );
 
       // Safeguard just in case
-      if( a.indexOf( '.') != -1 && onlyLastPath ){
+      if( typeof a === 'string' && a.indexOf && a.indexOf( '.') != -1 && onlyLastPath ){
         if( onlyLastPath != a.split('.')[0] ) throw new Error("When using elemMatch, sub-paths must all match" );
       }
 
@@ -359,28 +359,25 @@ var MongoMixin = declare( Object, {
     self._completeRecord( obj, function( err, obj ){
       if( err ) return cb( err );
 
-      // Temporarily add UcFields and _clean, since about to do update
-      // NOTE: it's IMPORTANT to pass all fields to the update, because
-      // the change in the schema could just be that a string field has
-      // become searchable.
-      self._addUcFields( obj );
-      obj._clean = true;
+      //console.log("OBJ:", obj );
 
-      // Update record. Note that the record will be the exact same as it was, except:
-      // - _clean is true
-      // - UC fields are added (as they should be)
-      // - _children is populated by _completeRecord
+      // Makes up an update object which is
+      // 1) All non-schema fields (therefore _children)
+      // 2) __uc__ fields,
+      // 3) _clean set to true
+      // This was officially added so that record stay deserialised
+      var updateObject = {};
+      for( var k in obj ){
+        if( ! self.schema.structure[ k ] ) updateObject[ k ] = obj[ k ];
+      }
+      self._addUcFields( updateObject );
+      updateObject._clean = true;
+
       var updateQuery = {};
       updateQuery[ self.idProperty ] = obj[ self.idProperty ];
-      self.collection.update( updateQuery, { $set: obj }, { multi: false }, function( err, total ){
+      self.collection.update( updateQuery, { $set: updateObject }, { multi: false }, function( err, total ){
         if( err ) return cb( err );
         if( !total ) return cb( new Error("Record to be cleared not found") );
-
-        // Delete UcFields and _clean since returning the object
-        // Note that there is no point in cleaning up the children, since
-        // _completeRecord takes care of it.
-        delete obj._clean;
-        self._deleteUcFields( obj );
 
         cb( null, obj );
       });
@@ -470,8 +467,9 @@ var MongoMixin = declare( Object, {
     if( options.blockEmptyFilter && Object.keys( mongoParameters.querySelector ).length === 0 ){
       return cb( new Error("Cannot run on empty query") );
     }
-    if( self.table == 'transactions')
-    consolelog("MONGO PARAMETERS:", self.table, require('util').inspect( mongoParameters, { depth: 10 } ) );
+    //if( self.table == 'users')
+    if( options.verbose )
+      console.log("DB QUERY:", self.table, require('util').inspect( mongoParameters, { depth: 10 } ) );
 
     // If sortHash is empty, AND there is a self.positionField, then sort
     // by the element's position
@@ -511,6 +509,7 @@ var MongoMixin = declare( Object, {
     consolelog("PROJECTION HASH:", this.table, projectionHash );
     var cursor = self.collection.find( mongoParameters.querySelector).project( projectionHash );
     consolelog("FIND IN SELECT: ",  require('util').inspect( mongoParameters.querySelector, { depth: 10 } ) );
+
 
     /*
     var __m = mongoParameters.querySelector;
@@ -704,9 +703,10 @@ var MongoMixin = declare( Object, {
               if( ! noChildren ) var _children = doc._children;
               var clean = doc._clean;
 
-              self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
 
+              self.schema.validate( doc, { ignoreFieldsWithAttributes: [ 'doNotSave' ], deserialize: true, ignoreFields: [ '_children', '_clean' ] }, function( err, validatedDoc, errors ){
                 if( err ) return callback( err );
+
 
                 if( self.strictSchemaOnFetch && errors.length ) {
                   var e =  new self.SchemaError( "Schema is strict and loaded data didn't match");
@@ -724,6 +724,7 @@ var MongoMixin = declare( Object, {
                 var skip = clean || noChildren;
                 self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                   if( err ) return callback( err );
+
 
                   // Note: at this point, _children might be either the old existing one,
                   // or a new copy created by _cleanRecord
@@ -756,6 +757,7 @@ var MongoMixin = declare( Object, {
             // TODO: maybe emit a signal, or do SOMETHING to notify the error in case of errorInDelete
             function( err ){
               if( err && ! err.errorInDelete ) return cb( err );
+
 
               // That's all!
               cb( null, queryDocs, queryDocs.length, grandTotal );
@@ -1041,14 +1043,19 @@ var MongoMixin = declare( Object, {
               repositionIfNeeded( function( err ){
                 if( err ) return cb( err );
 
+
                 self._updateParentsRecords( { op: 'insert', record: record }, function( err ){
                   if( err ) return cb( err );
+
+                  //if( self.table == 'auditTrail' ) process.exit( 0 );
+                  if( self.table == 'auditTrail' ) self.stocazzo = true;
 
                   var opt = {};
                   if( typeof opt.children != 'undefiend' ) opt.children = options.children;
                   // Re-fetch the record using the API
                   self.selectById( record[ self.idProperty ], opt, function( err, fetchedRecord ){
                     if( err ) return cb( err );
+
 
                     // Emit the insert event
                     self.emitCollect( 'simpledblayer-insert', { table: self, record: fetchedRecord, options: options }, function( err ){
@@ -2168,9 +2175,9 @@ var MongoMixin = declare( Object, {
             consolelog( rnd, "CASE #3 (deleteMany)", params.op );
 
             // No way. Too untested.
-            if( nestedParams.type === 'multiple' ){
-              return cb( new Error("Sorry, this code is just too untested to do that right now") );
-            }
+            //if( nestedParams.type === 'multiple' ){
+            //  return cb( new Error("Sorry, this code is just too untested to do that right now") );
+            //}
 
 
             // Assign the parameters
