@@ -1496,14 +1496,18 @@ var MongoMixin = declare( Object, {
     // ***********************************************************************
     // Add index for positionField, keeping into account positionBaseField
     // ***********************************************************************
-    var keysForPosition = {};
-    self.positionBase.forEach( function( positionBaseField ){
-      keysForPosition[ positionBaseField ] = 1;
-    });
-    keysForPosition[ self.positionField ] = 1;
-    consolelog("Keys for position hash:", keysForPosition );
-    //allIndexes[ '__main' + self._makeSignature( keysForPosition ) ] = { keys: keysForPosition, opt: opt };
-    allIndexes.push( { keys: keysForPosition, opt: opt, name: '_positionIndex' } );
+    if( self.positionField ) {
+      var keysForPosition = {};
+      self.positionBase.forEach( function( positionBaseField ){
+        keysForPosition[ positionBaseField ] = 1;
+      });
+      keysForPosition[ self.positionField ] = 1;
+      consolelog("Keys for position hash:", keysForPosition );
+      //allIndexes[ '__main' + self._makeSignature( keysForPosition ) ] = { keys: keysForPosition, opt: opt };
+      allIndexes.push( { keys: keysForPosition, opt: opt, name: '_positionIndex' } );
+    } else {
+      consolelog("No position field. So, no position index." );
+    }
 
     consolelog("At this point, allIndexes is:" );
     consolelog( allIndexes );
