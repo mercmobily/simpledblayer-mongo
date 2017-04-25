@@ -801,6 +801,8 @@ var MongoMixin = declare( Object, {
     // Otherwise, just to the passed fields is fine
     var onlyObjectValues = !options.deleteUnsetFields;
 
+
+
     self.emitCollect( 'simpledblayer-pre-update', { table: self, conditions: conditions, updateObject: updateObject, options: options }, function( err ){
       if( err ) return cb( err );
 
@@ -887,12 +889,10 @@ var MongoMixin = declare( Object, {
             var u = {};
             if( Object.keys( updateObjectWithLookups ).length )  u.$set = updateObjectWithLookups;
             if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
-            self.collection.findAndModify( mongoParameters.querySelector, {}, u, { new: true }, function( err, doc, n ){
+            self.collection.findAndModify( mongoParameters.querySelector, {}, u, { new: false }, function( err, doc, n ){
               if( err ) return cb( err );
 
-              // Patched for mongo driver 2.0
-              // TODO: findAndModify is deprecated, update to a current function AND probably delete this
-              if( NEWAPI ) doc = doc.value;
+              doc = doc.value;
 
               if( doc ){
 
@@ -904,7 +904,7 @@ var MongoMixin = declare( Object, {
                   self.selectById( doc[ self.idProperty ], function( err, fullRecord ){
                     if( err ) return cb( err );
 
-                    self.emitCollect( 'simpledblayer-update-one', { table: self, record: fullRecord, conditions: conditions, updateObject: updateObject, options: options }, function( err ){
+                    self.emitCollect( 'simpledblayer-update-one', { table: self, recordBefore: doc, record: fullRecord, conditions: conditions, updateObject: updateObject, options: options }, function( err ){
                       if( err ) return cb( err );
 
                       cb( null, 1, fullRecord );
