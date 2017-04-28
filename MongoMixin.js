@@ -1259,13 +1259,13 @@ var MongoMixin = declare( Object, {
   },
 
   makeIndex: function( keys, name, options, cb ){
-    console.log("\n\n\n\n\nMONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
+    consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
     // This is important or the call will stall
     if( Object.keys( keys).length === 0 ) return cb( null );
 
-    console.log("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
+    consolelog("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
@@ -1273,11 +1273,11 @@ var MongoMixin = declare( Object, {
     opt.unique = !!options.unique;
     if( typeof( name ) === 'string' )  opt.name = name;
 
-    console.log("ONE", keys, opt);
+    consolelog("ONE", keys, opt);
     this.collection.createIndex( keys, opt, function( err ){
       if( err ) return cb( err );
 
-      console.log("TWO", keys, opt);
+      consolelog("TWO", keys, opt);
       cb( null );
     });
   },
@@ -1464,8 +1464,8 @@ var MongoMixin = declare( Object, {
       consolelog("No position field. So, no position index." );
     }
 
-    console.log("At this point, allIndexes is:", allIndexes.length );
-    console.log( allIndexes );
+    consolelog("At this point, allIndexes is:", allIndexes.length );
+    consolelog( allIndexes );
 
     // Actually make the indexes
     async.eachSeries(
