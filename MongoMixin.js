@@ -81,10 +81,6 @@ var MongoMixin = declare( Object, {
   },
 
 
-  _isSearchableAsString: function( field ){
-    return this._searchableHash[ field ] && this._searchableHash[ field ].type === 'string';
-  },
-
   _addPrefix: function( field, fieldPrefix ){
 
     // mongoPath will be the full path
@@ -109,12 +105,6 @@ var MongoMixin = declare( Object, {
     } else {
       return s;
     }
-  },
-
-  _addUcPrefixToPath: function( s ){
-    var a = s.split('.');
-    a[ a.length - 1 ] = '__uc__' + a[ a.length - 1 ];
-    return a.join('.');
   },
 
   _operators: {
@@ -281,24 +271,14 @@ var MongoMixin = declare( Object, {
         throw new self.SchemaError( { errors: errors } );
       }
 
-      // Create aIsSearchableAsString. Saving the result as I will need the result
-      // if this check later on, to determine whether to add __uc__ to `a`
-      aIsSearchableAsString = this._isSearchableAsString( aWithPrefix );
-
-      // `upperCase()` `b` if a is of type 'string', since it will be compared to
-      // the __uc__ equivalent field
-      b = aIsSearchableAsString ? b.toUpperCase() : b;
-
       // Unless we want a selector without path (only used when `$pull`ing an array in `deleteMany`),
       // `a` needs to become `aWithPrefix`.
 
       a = selectorWithoutBells ? a : aWithPrefix;
-      if( aIsSearchableAsString ) a = self._addUcPrefixToPath( a );
 
       if( onlyLastPath ){
         a = a.substr( a.lastIndexOf('.') + 1);
       } else {
-        // Add __uc__ (if field is 'string') to path
 
         // Add _children to `a` (unless a selector without bells was required)
         a = selectorWithoutBells ? a : self._addChildrenPrefixToPath( a );
@@ -332,9 +312,6 @@ var MongoMixin = declare( Object, {
           throw( new Error("Field " + field + " is not searchable, and therefore not sortable" ) );
         }
 
-        if( self._isSearchableAsString( field ) ){
-          field = this._addUcPrefixToPath( field );
-        }
         field = this._addChildrenPrefixToPath( field );
 
         sortHash[ field ] = sortDirection;
@@ -363,14 +340,12 @@ var MongoMixin = declare( Object, {
 
       // Makes up an update object which is
       // 1) All non-schema fields (therefore _children)
-      // 2) __uc__ fields,
       // 3) _clean set to true
       // This was officially added so that record stay deserialised
       var updateObject = {};
       for( var k in obj ){
         if( ! self.schema.structure[ k ] ) updateObject[ k ] = obj[ k ];
       }
-      self._addUcFields( updateObject );
       updateObject._clean = true;
 
       var updateQuery = {};
@@ -627,10 +602,10 @@ var MongoMixin = declare( Object, {
                     // Note: at this point, _children might be either the old existing one,
                     // or a new copy created by _cleanRecord
                     // At this point, sort out _children (which might get deleted
-                    // altogether or might have extra _uc__ fields) AND
+                    // altogether) AND
                     // get rid of obj._clean which isn't meant to be returned to the user
                     if( ! noChildren )
-                      self._deleteUcFieldsAndCleanfromChildren( _children );
+                      self._deleteCleanfromChildren( _children );
                     delete obj._clean;
 
                     // If options.delete is on, then remove the record before returning it
@@ -720,7 +695,6 @@ var MongoMixin = declare( Object, {
 
                 // If the object isn't clean, then it will trigger the _completeRecord
                 // call which will effectively complete the record with the right _children
-                // and add any UC fields needed
                 var skip = clean || noChildren;
                 self.cleanRecord( validatedDoc, skip, function( err, validatedDoc ){
                   if( err ) return callback( err );
@@ -731,7 +705,7 @@ var MongoMixin = declare( Object, {
                   // Sort out _children AND
                   // get rid of obj._clean which isn't meant to be returned to the user
                   if( !noChildren )
-                    self._deleteUcFieldsAndCleanfromChildren( _children );
+                    self._deleteCleanfromChildren( _children );
                   delete validatedDoc._clean;
 
                   queryDocs[ index ] = validatedDoc;
@@ -815,9 +789,6 @@ var MongoMixin = declare( Object, {
 
           unsetObject[ i ] = 1;
           delete updateObject[ i ];
-          if( self._isSearchableAsString( i ) ){
-            unsetObject[ '__uc__' + i ] = 1;
-          }
         }
       });
 
@@ -838,9 +809,6 @@ var MongoMixin = declare( Object, {
         // simply delete it
         delete updateObject._id;
 
-        // Add __uc__ fields to the updateObject (they are the uppercase fields
-        // used for filtering of string fields)
-        self._addUcFields( updateObject );
 
         // If `options.deleteUnsetFields`, Unset any value that is not actually set but IS in the schema,
         // so that partial PUTs will "overwrite" whole objects rather than
@@ -852,10 +820,6 @@ var MongoMixin = declare( Object, {
             if( typeof( updateObject[ i ] ) === 'undefined' && i !== '_id' && i !== self.positionField && i != '_clean' ){
               unsetObject[ i ] = 1;
 
-              // Get rid of __uc__ objects if the equivalent field was taken out
-              if( self._isSearchableAsString( i ) ){
-                unsetObject[ '__uc__' + i ] = 1;
-              }
             }
           });
         }
@@ -997,11 +961,6 @@ var MongoMixin = declare( Object, {
           }
 
           consolelog( rnd, "record after validation:", record );
-
-          // Add __uc__ fields to the record
-          self._addUcFields( record );
-
-          consolelog( rnd, "record with __uc__ fields:", record );
 
           self._completeRecord( record, function( err, recordWithLookups ){
             if( err ) return cb( err );
@@ -1300,13 +1259,13 @@ var MongoMixin = declare( Object, {
   },
 
   makeIndex: function( keys, name, options, cb ){
-    //consolelog("MONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
+    console.log("\n\n\n\n\nMONGODB: Called makeIndex in collection ", this.table, ". Keys: ", keys );
     var opt = {};
 
     // This is important or the call will stall
     if( Object.keys( keys).length === 0 ) return cb( null );
 
-    consolelog("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
+    console.log("INDEXING", this.table, "index name:", name, "with keys:", keys, ' options:', options );
 
     if( typeof( options ) === 'undefined' || options === null ) options = {};
     opt.background = !!options.background;
@@ -1314,11 +1273,11 @@ var MongoMixin = declare( Object, {
     opt.unique = !!options.unique;
     if( typeof( name ) === 'string' )  opt.name = name;
 
-    consolelog("ONE", keys, opt);
+    console.log("ONE", keys, opt);
     this.collection.createIndex( keys, opt, function( err ){
       if( err ) return cb( err );
 
-      consolelog("TWO", keys, opt);
+      console.log("TWO", keys, opt);
       cb( null );
     });
   },
@@ -1344,10 +1303,6 @@ var MongoMixin = declare( Object, {
     consolelog("isSearchableAsString is:");
     consolelog( require('util').inspect( this._searchableHash ) );
 
-    // Add the __uc prefix (if necessary)
-    if( this._isSearchableAsString( s ) ) {
-      s = this._addUcPrefixToPath( s );
-    }
     // Turn it into a proper field path (it will only affect fields with "." in them)
     s = this._addChildrenPrefixToPath( s );
 
@@ -1372,7 +1327,7 @@ var MongoMixin = declare( Object, {
     if( options.background ) opt.background = true;
 
 
-    consolelog("Run generateSchemaIndexes for table", self.table );
+    consolelog("\n\n\n\nRun generateSchemaIndexes for table", self.table );
 
     consolelog("\nindexGroups for: ", self.table );
     consolelog( require('util').inspect( self._indexGroups, { depth: 10 }  ));
@@ -1509,14 +1464,13 @@ var MongoMixin = declare( Object, {
       consolelog("No position field. So, no position index." );
     }
 
-    consolelog("At this point, allIndexes is:" );
-    consolelog( allIndexes );
+    console.log("At this point, allIndexes is:", allIndexes.length );
+    console.log( allIndexes );
 
     // Actually make the indexes
     async.eachSeries(
       allIndexes,
       function( item, cb ){
-        consolelog("ITEM: ", item );
         self.makeIndex( item.keys, item.name, item.opt, cb );
       },
       cb
@@ -1534,10 +1488,6 @@ var MongoMixin = declare( Object, {
   // **** record is added, as well as helper functions for         ****
   // **** the lack, in MongoDB, of case-independent searches.      ****
   // ****                                                          ****
-  // **** For lack of  case-insensitive search, the layer creates  ****
-  // **** __uc__ fields that are uppercase equivalent of 'string'  ****
-  // **** fields in the schema.                                    ****
-  // ****                                                          ****
   // **** About joins, if you have people and each person can have ****
   // **** several email addresses, when adding an email address    ****
   // **** the "parent" record will have the corresponding          ****
@@ -1553,7 +1503,7 @@ var MongoMixin = declare( Object, {
   // ******************************************************************
   // ******************************************************************
 
-  _deleteUcFieldsAndCleanfromChildren: function( _children ){
+  _deleteCleanfromChildren: function( _children ){
     var self = this;
 
     for( var k in _children ){
@@ -1561,32 +1511,14 @@ var MongoMixin = declare( Object, {
       var child = _children[ k ];
       if( Array.isArray( child ) ){
         for( var i = 0, l = child.length; i < l; i++ ){
-          self._deleteUcFields( child[ i ] );
           delete child[ i ]._clean;
         }
       } else {
-        self._deleteUcFields( child );
         delete child._clean;
       }
     }
   },
 
-   _deleteUcFields: function( record ){
-    for( var k in record ){
-      if( k.substr( 0, 6 ) === '__uc__' ) delete record[ k ];
-    }
-  },
-
-
-  _addUcFields: function( record ){
-    var self = this;
-
-    for( var k in record ){
-      if( self._isSearchableAsString( k ) ){
-        record[ '__uc__' + k ] = record[ k ].toUpperCase();
-      }
-    }
-  },
 
   _completeRecord: function( record, cb ){
 
@@ -1630,9 +1562,6 @@ var MongoMixin = declare( Object, {
         self._getChildrenData( recordWithLookups, recordKey, function( err, childData){
           if( err ) return cb( err );
 
-           childData.forEach( function( item ){
-            childLayer._addUcFields( item );
-          })
           childData._children = {};
 
           consolelog( rnd, "The childData data is:", childData );
@@ -1672,14 +1601,12 @@ var MongoMixin = declare( Object, {
             // being added. This is an edge case, but it's nice to cover it
             if( childLayer.table === self.table && recordWithLookups[ self.idProperty ] === recordWithLookups[ recordKey ] ){
 
-              // Make up a temporary copy of the record, to which _children and __uc__ fields
-              // will be added
+              // Make up a temporary copy of the record, to which _children
               var t = {};
               for( var k in record ){
                 if( !record.hasOwnProperty( k ) ) continue;
                 t[ k ] = record[ k ];
               }
-              childLayer._addUcFields( t );
               t._children = {};
               recordWithLookups._children[ recordKey ] = t;
 
@@ -1693,7 +1620,6 @@ var MongoMixin = declare( Object, {
 
               if( childData ){
 
-                childLayer._addUcFields( childData );
                 childData._children = {};
 
                 consolelog( rnd, "The childData data is:", childData );
@@ -1778,8 +1704,6 @@ var MongoMixin = declare( Object, {
 
             if( childData ){
 
-              // Add uppercase fields
-              childLayer._addUcFields( childData );
 
               // Add _children to childData, as it's expected a lot of times
               childData._children = {};
@@ -1994,13 +1918,12 @@ var MongoMixin = declare( Object, {
             });
             mongoSelector._clean = true;
 
-            // The updateRecord variable is the same as record, but with uc fields and _children added
+            // The updateRecord variable is the same as record, but with  _children added
             var insertRecord = {};
             for( k in record ){
               if( ! record.hasOwnProperty( k ) ) continue;
               insertRecord[ k ] = record[ k ];
             }
-            self._addUcFields( insertRecord );
             insertRecord._children = {};
 
             updateObject = { '$push': {} };
