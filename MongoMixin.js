@@ -853,6 +853,9 @@ var MongoMixin = declare( Object, {
             var u = {};
             if( Object.keys( updateObjectWithLookups ).length )  u.$set = updateObjectWithLookups;
             if( Object.keys( unsetObjectWithLookups ).length ) u.$unset = unsetObjectWithLookups;
+            if( !Object.keys( u ).length ){
+              return cb( new Error( "Empty set specified in change"));
+            }
             self.collection.findAndModify( mongoParameters.querySelector, {}, u, { new: false }, function( err, doc, n ){
               if( err ) return cb( err );
 
