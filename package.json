@@ -7,7 +7,7 @@
     "mongo"
   ],
   "main": "MongoMixin.js",
-  "version": "0.3.56",
+  "version": "0.3.57",
   "private": false,
   "repository": {
     "type": "git",
@@ -16,20 +16,16 @@
   "author": {
     "name": "Tony Mobily"
   },
-  "devDependencies": {
-    "simpleschema": "0.3.x",
-    "simpleschema-mongo": "0.3.x"
-  },
+  "devDependencies": {},
   "dependencies": {
-    "simpledblayer": "0.3.x",
-    "simpledeclare": "0.3.x",
     "async": "~1.5.2",
+    "bson": "^1.0.4",
+    "debug": "~2.2.0",
     "mongodb": "~2.2.x",
-    "debug": "~2.2.0"
+    "simpledblayer": "0.3.x",
+    "simpledeclare": "0.3.x"
   },
   "scripts": {
     "test": "nodeunit test.js"
-  },
-  "devDependencies": {
   }
 }

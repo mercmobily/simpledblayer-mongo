@@ -472,6 +472,7 @@ var MongoMixin = declare( Object, {
       if( ! self._projectionHash.hasOwnProperty( k ) ) continue;
       projectionHash[ k ] = self._projectionHash[ k ];
     }
+    projectionHash._clean = true
 
     if( ! noChildren ) projectionHash._children = true;
     consolelog("SO PROJECTIONHASH IS:", projectionHash );
